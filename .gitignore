@@ -1,0 +1,17 @@
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+.env
+.idea/
+.vscode/
+
+# Local media uploads & HLS chunks (prevent pushing large video binaries to Git)
+backend/uploads/videos/*
+!backend/uploads/videos/.gitkeep
+backend/uploads/hls/*
+!backend/uploads/hls/.gitkeep
+backend/uploads/posters/*
+!backend/uploads/posters/.gitkeep
+backend/uploads/misc/*
+!backend/uploads/misc/.gitkeep

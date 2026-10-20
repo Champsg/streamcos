@@ -1,0 +1,8 @@
+{
+  "runtime": "static",
+  "platformVersion": 15,
+  "entry": "frontend/index.html",
+  "name": "Video Streaming Website",
+  "slug": "video-streaming-website",
+  "managedCronJobs": []
+}

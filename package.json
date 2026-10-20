@@ -1,0 +1,14 @@
+{
+  "name": "streamcos",
+  "version": "1.0.0",
+  "description": "StreamCos Video Streaming Platform with separated Backend & Frontend",
+  "main": "backend/server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "node backend/server.js",
+    "test": "node backend/test.js"
+  },
+  "keywords": ["video", "streaming", "node"],
+  "author": "",
+  "license": "MIT"
+}
