@@ -2,7 +2,7 @@
   "use strict";
 
   // shortcut: local storage caching layer as offline fallback when backend server is restarting or unreachable.
-  var DEFAULT_TUNNEL_URL = 'https://reference-diameter-heroes-supports.trycloudflare.com';
+  var DEFAULT_TUNNEL_URL = 'https://correct-disburse-curtain.ngrok-free.dev';
   var customApi = localStorage.getItem('sc_api_base');
   var API_BASE = customApi
     ? customApi.replace(/\/+$/, '')
