@@ -67,6 +67,14 @@
   function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
   function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function(c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
   function inr(n) { return "₹" + Number(n || 0).toLocaleString("en-IN"); }
+  function mediaUrl(url) {
+    if (!url) return '';
+    if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) return url;
+    if (url.startsWith('/uploads/')) {
+      return (API_BASE ? API_BASE : '') + url;
+    }
+    return url;
+  }
   function byId(id) { for (var i = 0; i < catalog.length; i++) if (catalog[i].id === id) return catalog[i]; return null; }
   function hasPass() { return !!passHolders; }
   function isOwned(id) { var v = byId(id); if (v && v.price === 0) return true; if (!session) return false; if (passHolders) return true; return owns.indexOf(id) >= 0; }
@@ -200,7 +208,7 @@
     var owned = isOwned(f.id);
     slot.innerHTML =
       '<article class="hero">' +
-        '<img src="' + esc(f.poster) + '" alt="' + esc(f.title) + ' poster" />' +
+        '<img src="' + esc(mediaUrl(f.poster)) + '" alt="' + esc(f.title) + ' poster" />' +
         '<div class="shade"></div>' +
         '<div class="hbody">' +
           '<div class="chiprow"><span class="chip hot">Featured premiere</span><span class="chip">' + esc(f.quality) + ' · Dolby sound</span></div>' +
@@ -222,7 +230,7 @@
     $("#trendRail").innerHTML = list.map(function(v, i) {
       var owned = isOwned(v.id);
       return '<article class="trend-card" data-open="' + v.id + '">' +
-        '<div class="thumb"><img src="' + esc(v.poster) + '" alt="' + esc(v.title) + ' poster" loading="lazy" />' +
+        '<div class="thumb"><img src="' + esc(mediaUrl(v.poster)) + '" alt="' + esc(v.title) + ' poster" loading="lazy" />' +
           '<span class="rank">' + (i + 1) + '</span>' +
           (v.price === 0 ? '<span class="pricetag free">FREE</span>' : (owned ? '' : '<span class="pricetag pass">PASS</span>')) +
           '<span class="locktag' + (owned ? ' open' : '') + '">' + (owned ? ICON.check : ICON.lock) + '</span>' +
@@ -254,7 +262,7 @@
     $("#browseGrid").innerHTML = list.map(function(v) {
       var owned = isOwned(v.id);
       return '<article class="pcard" data-open="' + v.id + '">' +
-        '<div class="pimg"><img src="' + esc(v.poster) + '" alt="' + esc(v.title) + ' poster" loading="lazy" onerror="this.style.display=\'none\';this.parentNode.insertAdjacentHTML(\'beforeend\',\'<div class=&quot;tile-fallback&quot;>' + esc(v.title) + '</div>\')" />' +
+        '<div class="pimg"><img src="' + esc(mediaUrl(v.poster)) + '" alt="' + esc(v.title) + ' poster" loading="lazy" onerror="this.style.display=\'none\';this.parentNode.insertAdjacentHTML(\'beforeend\',\'<div class=&quot;tile-fallback&quot;>' + esc(v.title) + '</div>\')" />' +
           (v.price === 0 ? '<span class="pricetag free">FREE</span>' : (owned ? '' : '<span class="pricetag pass">PASS</span>')) +
         '</div>' +
         '<h3>' + esc(v.title) + '</h3>' +
@@ -280,7 +288,7 @@
     var owned = isOwned(id);
     var el = $("#detailSheet");
     el.innerHTML =
-      '<div class="detail-hero"><img src="' + esc(v.poster) + '" alt="' + esc(v.title) + ' poster" /><div class="shade"></div>' +
+      '<div class="detail-hero"><img src="' + esc(mediaUrl(v.poster)) + '" alt="' + esc(v.title) + ' poster" /><div class="shade"></div>' +
         '<button class="sheet-x" data-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>' +
       '<div class="detail-body">' +
         '<h2>' + esc(v.title) + '</h2>' + metaRow(v) +
@@ -475,15 +483,70 @@
   /* ============ player ============ */
   var playerCtx = { id: null, preview: false };
   var hlsInstance = null;
+  var plyrInstance = null;
+
+  function initPlyr(el, qualities, onQualityChange) {
+    if (window.Plyr) {
+      var controls = [
+        'play-large',
+        'restart',
+        'rewind',
+        'play',
+        'fast-forward',
+        'progress',
+        'current-time',
+        'duration',
+        'mute',
+        'volume',
+        'settings',
+        'pip',
+        'airplay',
+        'fullscreen'
+      ];
+      var settings = ['speed'];
+      var qualityConfig = undefined;
+      if (qualities && qualities.length > 1) {
+        settings.unshift('quality');
+        qualityConfig = {
+          default: 0,
+          options: qualities,
+          forced: true,
+          onChange: onQualityChange
+        };
+      }
+      try {
+        plyrInstance = new Plyr(el, {
+          controls: controls,
+          settings: settings,
+          quality: qualityConfig,
+          speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+          seekTime: 10,
+          keyboard: { focused: true, global: true },
+          tooltips: { controls: true, seek: true }
+        });
+        return plyrInstance;
+      } catch (err) {
+        console.warn('Plyr init error:', err);
+      }
+    }
+    return null;
+  }
 
   async function openPlayer(id, preview) {
     var v = byId(id); if (!v) return;
     closeSheets();
-    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
+    if (plyrInstance) { try { plyrInstance.destroy(); } catch (e) {} plyrInstance = null; }
+    if (hlsInstance) { try { hlsInstance.destroy(); } catch (e) {} hlsInstance = null; }
     playerCtx = { id: id, preview: !!preview };
     $("#playerTitle").textContent = v.title;
-    $("#playerMode").textContent = preview ? "Preview · 45 sec" : "Authorizing...";
+    $("#playerMode").textContent = preview ? "Preview · 45s left" : "Authorizing...";
     $("#previewEnd").classList.remove("on");
+
+    var el = $("#videoEl");
+    if (el) {
+      el.pause();
+      el.currentTime = 0;
+    }
 
     var videoSrc = v.video || '';
     var activePlayToken = null;
@@ -512,7 +575,6 @@
       videoSrc = (API_BASE ? API_BASE : '') + videoSrc;
     }
 
-    var el = $("#videoEl");
     // Hovod HLS adaptive bitrate streaming
     if (videoSrc.includes('.m3u8')) {
       if (window.Hls && Hls.isSupported()) {
@@ -540,29 +602,70 @@
         });
         hlsInstance.loadSource(videoSrc);
         hlsInstance.attachMedia(el);
-        $("#playerMode").textContent = (preview ? "Preview · " : "") + "⚡ Adaptive HLS";
+
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+          var levels = (hlsInstance.levels || []).map(function(l) { return l.height; }).filter(Boolean);
+          var uniqueLevels = levels.filter(function(v, i, a) { return a.indexOf(v) === i; }).sort(function(a, b) { return b - a; });
+          uniqueLevels.unshift(0); // Auto
+
+          initPlyr(el, uniqueLevels, function(newQuality) {
+            if (newQuality === 0) {
+              hlsInstance.currentLevel = -1; // Auto
+            } else {
+              hlsInstance.levels.forEach(function(lvl, idx) {
+                if (lvl.height === newQuality) hlsInstance.currentLevel = idx;
+              });
+            }
+          });
+
+          var saved = session && progress[id];
+          if (!preview && saved && saved.t > 5 && saved.d && saved.t < saved.d * 0.95) {
+            el.currentTime = saved.t;
+          }
+          if (plyrInstance) plyrInstance.play().catch(function() {});
+          else el.play().catch(function() {});
+        });
+        $("#playerMode").textContent = preview ? "Preview · 45s left" : "⚡ Adaptive HLS";
       } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
         el.src = videoSrc;
-        $("#playerMode").textContent = (preview ? "Preview · " : "") + "HLS Stream";
+        initPlyr(el);
+        var saved = session && progress[id];
+        if (!preview && saved && saved.t > 5 && saved.d && saved.t < saved.d * 0.95) { el.currentTime = saved.t; }
+        if (plyrInstance) plyrInstance.play().catch(function() {});
+        else el.play().catch(function() {});
+        $("#playerMode").textContent = preview ? "Preview · 45s left" : "HLS Stream";
       } else {
         el.src = videoSrc;
+        initPlyr(el);
+        if (plyrInstance) plyrInstance.play().catch(function() {});
+        else el.play().catch(function() {});
       }
     } else {
       el.src = videoSrc;
+      initPlyr(el);
+      var saved = session && progress[id];
+      if (!preview && saved && saved.t > 5 && saved.d && saved.t < saved.d * 0.95) { el.currentTime = saved.t; }
+      if (plyrInstance) plyrInstance.play().catch(function() {});
+      else el.play().catch(function() {});
+      $("#playerMode").textContent = preview ? "Preview · 45s left" : "HD Stream";
     }
 
-    var saved = session && progress[id];
-    if (!preview && saved && saved.t > 5 && saved.d && saved.t < saved.d * 0.95) { el.currentTime = saved.t; }
     $("#player").classList.add("on");
     document.body.style.overflow = "hidden";
-    var p = el.play(); if (p && p.catch) p.catch(function() {});
   }
 
   function closePlayer() {
     var el = $("#videoEl");
     saveProgress();
-    if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
-    el.pause(); el.removeAttribute("src"); el.load();
+    if (plyrInstance) { try { plyrInstance.destroy(); } catch (e) {} plyrInstance = null; }
+    if (hlsInstance) { try { hlsInstance.destroy(); } catch (e) {} hlsInstance = null; }
+    if (el) {
+      el.pause();
+      el.removeAttribute("src");
+      el.currentTime = 0;
+      el.load();
+    }
+    $("#previewEnd").classList.remove("on");
     $("#player").classList.remove("on");
     document.body.style.overflow = "";
     renderLibrary();
@@ -571,7 +674,7 @@
   async function saveProgress() {
     if (!session || playerCtx.preview) return;
     var el = $("#videoEl");
-    if (!el.duration) return;
+    if (!el || !el.duration) return;
     progress[playerCtx.id] = { t: el.currentTime, d: el.duration };
     store.set(K.prog, progress);
     try {
@@ -584,14 +687,38 @@
 
   $("#videoEl").addEventListener("timeupdate", function() {
     var el = this;
-    if (playerCtx.preview && el.currentTime >= 45) {
+    if (playerCtx.preview) {
+      var remaining = Math.max(0, 45 - Math.floor(el.currentTime));
+      $("#playerMode").textContent = "Preview · " + remaining + "s left";
+      if (el.currentTime >= 45) {
+        el.currentTime = 45;
+        el.pause();
+        $("#previewEnd").classList.add("on");
+      }
+    }
+  });
+
+  $("#videoEl").addEventListener("seeking", function() {
+    var el = this;
+    if (playerCtx.preview && el.currentTime > 45) {
+      el.currentTime = 45;
       el.pause();
       $("#previewEnd").classList.add("on");
     }
   });
+
   $("#videoEl").addEventListener("pause", saveProgress);
   $("#playerClose").addEventListener("click", closePlayer);
   $("#previewBuyBtn").addEventListener("click", function() { closePlayer(); buyFlow("pass"); });
+  $("#previewReplayBtn").addEventListener("click", function() {
+    var el = $("#videoEl");
+    $("#previewEnd").classList.remove("on");
+    if (el) {
+      el.currentTime = 0;
+      if (plyrInstance) plyrInstance.play().catch(function() {});
+      else el.play().catch(function() {});
+    }
+  });
 
   /* ============ library ============ */
   function renderLibrary() {
@@ -627,13 +754,13 @@
     $("#continueSlot").innerHTML = cont.length ?
       '<div class="sec" style="margin-top:20px;"><div class="sec-head"><h2>Continue watching</h2></div><div class="rail">' +
       cont.map(function(c) {
-        return '<article class="trend-card" data-watch="' + c.v.id + '"><div class="thumb"><img src="' + esc(c.v.poster) + '" alt="' + esc(c.v.title) + ' poster" /><span class="locktag open">' + ICON.play + '</span></div>' +
+        return '<article class="trend-card" data-watch="' + c.v.id + '"><div class="thumb"><img src="' + esc(mediaUrl(c.v.poster)) + '" alt="' + esc(c.v.title) + ' poster" /><span class="locktag open">' + ICON.play + '</span></div>' +
           '<h3>' + esc(c.v.title) + '</h3><div class="prog" style="max-width:190px;"><i style="width:' + c.pct + '%"></i></div><div class="sub" style="margin-top:5px;"><span>' + c.pct + '% watched</span></div></article>';
       }).join("") + '</div></div>' : "";
 
     list.innerHTML = mine.map(function(v) {
       var p = progress[v.id]; var pct = p && p.d ? Math.min(100, Math.round(p.t / p.d * 100)) : 0;
-      return '<article class="lib-item" data-watch="' + v.id + '"><img src="' + esc(v.poster) + '" alt="' + esc(v.title) + ' poster" />' +
+      return '<article class="lib-item" data-watch="' + v.id + '"><img src="' + esc(mediaUrl(v.poster)) + '" alt="' + esc(v.title) + ' poster" />' +
         '<div class="li-body"><h3>' + esc(v.title) + '</h3><div class="sub">' + v.year + ' · ' + esc(v.category) + ' · ' + v.mins + ' min · ' + esc(v.quality) + '</div>' +
         (pct > 0 && pct < 100 ? '<div class="prog"><i style="width:' + pct + '%"></i></div>' : '<div class="sub" style="margin-top:6px; color:var(--green); font-weight:800;">' + (pct >= 100 ? "Watched · watch again" : "Ready to watch") + '</div>') +
         '</div><span class="play-fab">' + ICON.play + '</span></article>';
@@ -735,7 +862,7 @@
       (catalog.length ? catalog.map(function(v) {
         var n = (sales || []).filter(function(s) { return s.videoId === v.id; }).length;
         var isHls = v.video && v.video.includes('.m3u8');
-        return '<div class="adm-item"><img src="' + esc(v.poster) + '" alt="" onerror="this.style.visibility=\'hidden\'" />' +
+        return '<div class="adm-item"><img src="' + esc(mediaUrl(v.poster)) + '" alt="" onerror="this.style.visibility=\'hidden\'" />' +
           '<div class="ai-body"><h4>' + esc(v.title) + (isHls ? ' <span style="font-size:9.5px; background:rgba(255,176,32,.2); color:var(--gold); border:1px solid rgba(255,176,32,.4); padding:2px 5px; border-radius:4px; font-weight:800;">HLS</span>' : '') + '</h4><p>' + inr(v.price) + ' · ' + esc(v.category) + ' · ' + n + ' sold</p></div>' +
           '<div class="adm-actions">' +
             '<button class="pub-toggle' + (v.published ? '' : ' off') + '" data-pub="' + v.id + '">' + (v.published ? 'Live' : 'Hidden') + '</button>' +
