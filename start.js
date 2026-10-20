@@ -1,104 +1,192 @@
+'use strict';
+
+/**
+ * One-click launcher: backend + optional Cloudflare quick tunnel.
+ *
+ * Deliberately conservative:
+ *   - it never kills processes it did not start, unless you pass --force and
+ *     it can name the process holding the port;
+ *   - a missing `cloudflared` degrades to LAN-only instead of crashing;
+ *   - when the tunnel hands out a hostname it records it in
+ *     frontend/runtime-config.js and netlify.toml, so the deployed frontend
+ *     keeps working without editing code.
+ *
+ * Flags: --force  --no-tunnel  --port <n>
+ */
+
 const { spawn, execSync } = require('child_process');
+const net = require('net');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 1. Free port 5000 and clean up old instances
-try {
-  if (process.platform === 'win32') {
-    try {
-      const output = execSync('netstat -ano | findstr :5000', { encoding: 'utf8' });
-      const lines = output.trim().split('\n');
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        const pid = parts[parts.length - 1];
-        if (pid && !isNaN(pid) && parseInt(pid, 10) > 0) {
-          try { execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' }); } catch(e){}
-        }
-      }
-    } catch (e) {}
-    try { execSync('taskkill /F /IM cloudflared.exe', { stdio: 'ignore' }); } catch(e){}
-  }
-} catch (e) {}
+const args = process.argv.slice(2);
+const FORCE = args.includes('--force');
+const NO_TUNNEL = args.includes('--no-tunnel');
+const portFlag = args.indexOf('--port');
+const PORT = portFlag >= 0 && args[portFlag + 1] ? Number(args[portFlag + 1]) : Number(process.env.PORT || 5000);
 
-console.clear();
-console.log('\x1b[36m%s\x1b[0m', '==========================================================');
-console.log('\x1b[33m%s\x1b[0m', '      STREAMCOS — 24/7 ALL-IN-ONE PC STREAMING PLATFORM   ');
-console.log('\x1b[36m%s\x1b[0m', '==========================================================');
-console.log('Booting Backend Server and Hovod Transcoding Engine...');
+const ROOT = __dirname;
+const TUNNEL_FILE = path.join(ROOT, '.streamcos-tunnel.json');
 
-// 2. Start Backend Server
-const serverProc = spawn(process.execPath, [path.join(__dirname, 'backend', 'server.js')], {
-  stdio: ['ignore', 'pipe', 'inherit']
-});
-
-// 3. Find Local Network IPs
-const nets = os.networkInterfaces();
-const localIps = [];
-for (const name of Object.keys(nets)) {
-  for (const net of nets[name]) {
-    if (net.family === 'IPv4' && !net.internal) localIps.push(net.address);
-  }
-}
-
-let publicUrl = null;
-let tunnelProc = null;
-
-function printBanner() {
-  console.log('\x1b[32m%s\x1b[0m', '✔ ALL SYSTEMS ONLINE — STREAMING FROM YOUR PC 24/7');
-  console.log('----------------------------------------------------------');
-  console.log('\x1b[1m[1] On this PC:\x1b[0m           http://localhost:5000');
-  localIps.forEach(ip => {
-    console.log(`\x1b[1m[2] Local Wi-Fi (Phones):\x1b[0m http://${ip}:5000`);
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once('error', () => resolve(false));
+    probe.once('listening', () => probe.close(() => resolve(true)));
+    probe.listen(port, '0.0.0.0');
   });
-  if (publicUrl) {
-    console.log(`\x1b[33m\x1b[1m[3] Worldwide Public Link:\x1b[0m ${publicUrl}`);
-    console.log('\x1b[32m    (Cloudflare Edge Protected — ZERO warning screens)\x1b[0m');
-  } else {
-    console.log('\x1b[33m[3] Worldwide Public Link:\x1b[0m Connecting Cloudflare tunnel...');
-  }
-  console.log('----------------------------------------------------------');
-  console.log('• Keep this window open to keep your platform live 24/7.');
-  console.log('• Press Ctrl+C at any time to stop.\n');
 }
 
-// Cloudflare Tunnel (Clean, no warning screens, 100% free)
-tunnelProc = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5000'], {
-  stdio: ['ignore', 'pipe', 'pipe']
-});
-
-const urlRegex = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
-const onData = (data) => {
-  const match = data.toString().match(urlRegex);
-  if (match && !publicUrl) {
-    publicUrl = match[0];
-    console.clear();
-    printBanner();
-  }
-};
-tunnelProc.stdout.on('data', onData);
-tunnelProc.stderr.on('data', onData);
-
-setTimeout(() => {
-  if (!publicUrl) printBanner();
-}, 6000);
-
-// Auto-open browser
-setTimeout(() => {
+/** Best-effort "who owns this port" for a helpful, non-destructive message. */
+function findPortOwner(port) {
+  if (process.platform !== 'win32') return null;
   try {
-    if (process.platform === 'win32') {
-      spawn('cmd.exe', ['/c', 'start', 'http://localhost:5000'], { detached: true, stdio: 'ignore' });
-    }
-  } catch (e) {}
-}, 2500);
-
-// Cleanup on exit
-function shutdown() {
-  console.log('\nShutting down StreamCos cleanly...');
-  try { serverProc.kill(); } catch(e){}
-  try { if (tunnelProc) tunnelProc.kill(); } catch(e){}
-  process.exit(0);
+    const out = execSync(`netstat -ano | findstr :${port}`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const listening = out.split(/\r?\n/).find((line) => /LISTENING/i.test(line));
+    if (!listening) return null;
+    const pid = Number(listening.trim().split(/\s+/).pop());
+    if (!pid) return null;
+    let name = 'unknown';
+    try {
+      const csv = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      name = (csv.split(',')[0] || 'unknown').replace(/"/g, '');
+    } catch (e) {}
+    return { pid, name };
+  } catch (e) {
+    return null;
+  }
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+function line(text, color) {
+  const palette = { cyan: '\x1b[36m', yellow: '\x1b[33m', green: '\x1b[32m', dim: '\x1b[2m', bold: '\x1b[1m', reset: '\x1b[0m' };
+  console.log((palette[color] || '') + text + palette.reset);
+}
+
+function localIps() {
+  const nets = os.networkInterfaces();
+  const ips = [];
+  for (const name of Object.keys(nets)) {
+    for (const netInfo of nets[name] || []) {
+      if (netInfo.family === 'IPv4' && !netInfo.internal) ips.push(netInfo.address);
+    }
+  }
+  return ips;
+}
+
+async function main() {
+  console.log('');
+  line('  STREAMCOS — streaming platform for your own PC', 'cyan');
+  console.log('');
+
+  if (!(await isPortFree(PORT))) {
+    const owner = findPortOwner(PORT);
+    console.error(`  Port ${PORT} is already in use` + (owner ? ` by ${owner.name} (PID ${owner.pid}).` : '.'));
+    console.error('  Stop that process, pick another port with --port <n>, or replace it with:');
+    console.error('      npm start -- --force');
+    if (!FORCE) process.exit(1);
+    if (!owner) {
+      console.error('  --force was given but the owner could not be identified; refusing to kill blindly.');
+      process.exit(1);
+    }
+    console.log(`  --force: stopping ${owner.name} (PID ${owner.pid}) only.`);
+    try { execSync(`taskkill /F /PID ${owner.pid}`, { stdio: 'ignore' }); } catch (e) {}
+    await new Promise((r) => setTimeout(r, 600));
+  }
+
+  const serverProc = spawn(process.execPath, [path.join(ROOT, 'backend', 'server.js')], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+    env: Object.assign({}, process.env, { PORT: String(PORT) })
+  });
+  serverProc.stdout.on('data', (chunk) => process.stdout.write(chunk));
+  serverProc.on('exit', (code) => {
+    if (code !== 0 && code !== null) {
+      console.error('  Backend exited with code ' + code + '. Stopping.');
+      shutdown(code || 1);
+    }
+  });
+
+  let tunnelProc = null;
+  let publicUrl = null;
+
+  function banner() {
+    console.log('');
+    line('  ALL SYSTEMS ONLINE', 'green');
+    console.log('  ' + '-'.repeat(52));
+    console.log('  Local:        http://localhost:' + PORT);
+    localIps().forEach((ip) => console.log('  Wi-Fi:        http://' + ip + ':' + PORT));
+    console.log('  Public:       ' + (publicUrl || (NO_TUNNEL ? 'disabled (--no-tunnel)' : 'connecting…')));
+    console.log('  ' + '-'.repeat(52));
+    console.log('  Ctrl+C stops the backend and this tunnel process only.');
+    console.log('');
+  }
+
+  if (!NO_TUNNEL) {
+    tunnelProc = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+
+    // A missing binary is a normal condition, not a crash.
+    tunnelProc.on('error', (err) => {
+      tunnelProc = null;
+      if (err.code === 'ENOENT') {
+        line('  cloudflared not found — continuing on your local network only.', 'yellow');
+        line('  Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/', 'dim');
+      } else {
+        line('  Tunnel failed: ' + err.message + ' — continuing on your local network only.', 'yellow');
+      }
+      banner();
+    });
+
+    const onTunnelData = (data) => {
+      if (publicUrl) return;
+      const match = data.toString().match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
+      if (!match) return;
+      publicUrl = match[0];
+      try {
+        const { updateConfig } = require('./scripts/set-api-base');
+        updateConfig(publicUrl);
+        fs.writeFileSync(TUNNEL_FILE, JSON.stringify({ url: publicUrl, at: Date.now() }, null, 2));
+        line('  Tunnel: ' + publicUrl, 'yellow');
+        line('  frontend/runtime-config.js and netlify.toml now point at it.', 'dim');
+        line('  Redeploy the Netlify site (git push) for the redirects to update.', 'dim');
+      } catch (err) {
+        line('  Could not record the tunnel URL: ' + err.message, 'yellow');
+      }
+      banner();
+    };
+
+    if (tunnelProc) {
+      tunnelProc.stdout.on('data', onTunnelData);
+      tunnelProc.stderr.on('data', onTunnelData);
+    }
+  }
+
+  setTimeout(banner, NO_TUNNEL ? 1200 : 8000);
+
+  if (process.platform === 'win32') {
+    setTimeout(() => {
+      try {
+        spawn('cmd.exe', ['/c', 'start', `http://localhost:${PORT}`], { detached: true, stdio: 'ignore' }).unref();
+      } catch (e) {}
+    }, 2500);
+  }
+
+  let shuttingDown = false;
+  function shutdown(code = 0) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log('\n  Shutting down StreamCos…');
+    try { serverProc.kill(); } catch (e) {}
+    try { if (tunnelProc) tunnelProc.kill(); } catch (e) {}
+    setTimeout(() => process.exit(code), 150);
+  }
+
+  process.on('SIGINT', () => shutdown(0));
+  process.on('SIGTERM', () => shutdown(0));
+}
+
+main().catch((err) => {
+  console.error('Launcher failed:', err);
+  process.exit(1);
+});

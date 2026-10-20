@@ -4,9 +4,17 @@ const path = require('path');
 const os = require('os');
 const { transcodeToHLS, extractThumbnail } = require('./transcoder');
 const { getSecret, hashPassword, verifyPassword, createToken, verifyToken, extractToken } = require('./auth');
+const payments = require('./payments');
+const previews = require('./previews');
+const reconcile = require('./reconcile');
+const ownerAuth = require('./owner');
+const store = require('./store');
+const { createLimiters } = require('./ratelimit');
 
 const PORT = process.env.PORT || 5000;
-const DATA_FILE = path.join(__dirname, 'data.json');
+const DATA_FILE = process.env.STREAMCOS_DATA_FILE
+  ? path.resolve(process.env.STREAMCOS_DATA_FILE)
+  : path.join(__dirname, 'data.json');
 const FRONTEND_DIR = path.resolve(__dirname, '../frontend');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
@@ -14,6 +22,7 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 fs.mkdirSync(path.join(UPLOADS_DIR, 'videos'), { recursive: true });
 fs.mkdirSync(path.join(UPLOADS_DIR, 'posters'), { recursive: true });
 fs.mkdirSync(path.join(UPLOADS_DIR, 'hls'), { recursive: true });
+fs.mkdirSync(path.join(UPLOADS_DIR, previews.PREVIEW_DIR), { recursive: true });
 
 // shortcut: in-memory + single data.json file storage instead of postgres/mongodb, upgrade when scaling multi-instance or high write throughput.
 // shortcut: standard library http server instead of express/fastify, upgrade when adding middleware or complex routing.
@@ -53,74 +62,111 @@ let db = {
   passHolders: {},
   progress: {},
   sales: [],
+  payments: [],
+  webhookDeliveries: [],
   ownerPinHash: null,
   ownerPinSalt: null,
-  paymentConfig: {
-    upiId: "streamcos@upi",
-    merchantName: "StreamCos Cinema",
-    qrImage: null
-  }
+  ownerSetup: null,
+  paymentConfig: payments.normalizeConfig(null)
 };
 
 function loadDb() {
-  try {
-    if (fs.existsSync(DATA_FILE)) {
-      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-      const loaded = JSON.parse(raw);
-      db = Object.assign(db, loaded);
+  store.cleanupTempFiles(DATA_FILE);
 
-      if (!db.paymentConfig) {
-        db.paymentConfig = {
-          upiId: "streamcos@upi",
-          merchantName: "StreamCos Cinema",
-          qrImage: null
-        };
-      }
-
-      // Auto-migrate server secret
-      if (!db.serverSecret) {
-        db.serverSecret = getSecret();
-      }
-
-      // Auto-migrate legacy ownerPin to salted hash
-      if (db.ownerPin && !db.ownerPinHash) {
-        const p = hashPassword(db.ownerPin);
-        db.ownerPinHash = p.hash;
-        db.ownerPinSalt = p.salt;
-        delete db.ownerPin;
-      }
-
-      // Auto-migrate legacy users to salted hashes
-      if (Array.isArray(db.users)) {
-        db.users.forEach(u => {
-          if (u.pass && !u.passHash) {
-            const p = hashPassword(u.pass);
-            u.passHash = p.hash;
-            u.passSalt = p.salt;
-            delete u.pass;
-          }
-        });
-      }
-      saveDb();
-    } else {
-      db.serverSecret = getSecret();
-      saveDb();
-    }
-  } catch (err) {
-    console.error('Failed to load data.json, using defaults:', err.message);
-    if (!db.serverSecret) db.serverSecret = getSecret();
+  const loaded = store.load(DATA_FILE);
+  if (loaded.recovered) {
+    console.warn('⚠  Store was unreadable; recovered the previous good copy from ' +
+      path.basename(store.backupPath(DATA_FILE)) +
+      (loaded.error ? ' (' + loaded.error.message + ')' : ''));
+  } else if (loaded.error && loaded.error.code !== 'ENOENT') {
+    console.error('Failed to load the store, starting from defaults:', loaded.error.message);
   }
+
+  if (loaded.data) {
+    db = Object.assign(db, loaded.data);
+  }
+
+  // Payments: migrate legacy {upiId, merchantName, qrImage} config, make
+  // sure the ledgers exist, then expire any sessions left open by a crash.
+  db.paymentConfig = payments.normalizeConfig(db.paymentConfig);
+  if (!Array.isArray(db.payments)) db.payments = [];
+  if (!Array.isArray(db.webhookDeliveries)) db.webhookDeliveries = [];
+
+  // Auto-migrate server secret
+  if (!db.serverSecret) {
+    db.serverSecret = getSecret();
+  }
+
+  // Auto-migrate legacy ownerPin to salted hash
+  if (db.ownerPin && !db.ownerPinHash) {
+    const p = hashPassword(db.ownerPin);
+    db.ownerPinHash = p.hash;
+    db.ownerPinSalt = p.salt;
+    delete db.ownerPin;
+  }
+
+  // Auto-migrate legacy users to salted hashes
+  if (Array.isArray(db.users)) {
+    db.users.forEach(u => {
+      if (u.pass && !u.passHash) {
+        const p = hashPassword(u.pass);
+        u.passHash = p.hash;
+        u.passSalt = p.salt;
+        delete u.pass;
+      }
+    });
+  }
+
+  payments.sweepExpired(db, Date.now());
+  saveDb();
 }
 
 function saveDb() {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(db, null, 2), 'utf-8');
+    store.save(DATA_FILE, db);
   } catch (err) {
-    console.error('Failed to save data.json:', err.message);
+    // Never pretend a write succeeded: payment routes rely on state being
+    // durable before they answer the client.
+    console.error('CRITICAL: failed to persist the store:', err.message);
   }
 }
 
 loadDb();
+
+/* First-run ownership: a setup code printed here (or supplied through
+ * STREAMCOS_SETUP_CODE) is required to create the studio PIN. Without it the
+ * first visitor to a fresh deployment could claim the studio. */
+function bootstrapOwnerSetup() {
+  if (db.ownerPinHash) {
+    if (db.ownerSetup) { db.ownerSetup = null; saveDb(); }
+    return;
+  }
+
+  const envCode = String(process.env.STREAMCOS_SETUP_CODE || '').trim();
+  if (envCode) {
+    const { record } = ownerAuth.createSetupRecord(envCode);
+    db.ownerSetup = record;
+    saveDb();
+    console.log('Owner setup code is set from STREAMCOS_SETUP_CODE.');
+    return;
+  }
+
+  if (!db.ownerSetup) {
+    const { record, code } = ownerAuth.createSetupRecord();
+    db.ownerSetup = record;
+    saveDb();
+    console.log('');
+    console.log('  ┌───────────────────────────────────────────────');
+    console.log('  │ First run — no Owner Studio PIN is set yet.');
+    console.log('  │ Setup code: ' + code);
+    console.log('  │ Enter it with a new 4-digit PIN in Account → Owner Studio.');
+    console.log('  └───────────────────────────────────────────────');
+    console.log('');
+  }
+}
+bootstrapOwnerSetup();
+
+const limiters = createLimiters();
 
 function json(res, statusCode, data) {
   res.writeHead(statusCode, {
@@ -161,6 +207,122 @@ function requireOwner(req, searchParams) {
   return payload;
 }
 
+function isLoopback(address) {
+  return address === '::1' ||
+    address === '127.0.0.1' ||
+    address === '::ffff:127.0.0.1' ||
+    /^::ffff:127\./.test(address || '');
+}
+
+function clientIp(req) {
+  const remote = (req.socket && req.socket.remoteAddress) || 'unknown';
+  const forwarded = req.headers['x-forwarded-for'];
+  // Only the local tunnel process (cloudflared/ngrok) may speak for the
+  // client. A direct client that could set X-First-For would otherwise dodge
+  // every rate limit by rotating a header.
+  if (typeof forwarded === 'string' && forwarded.length && isLoopback(remote)) {
+    return forwarded.split(',')[0].trim() || remote;
+  }
+  return remote;
+}
+
+function send429(res, verdict) {
+  const seconds = Math.max(1, Math.ceil(verdict.retryAfterMs / 1000));
+  res.writeHead(429, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Retry-After': String(seconds),
+    'Access-Control-Allow-Origin': '*'
+  });
+  res.end(JSON.stringify({
+    error: 'Too many attempts — try again in ' + seconds + 's',
+    retryAfter: seconds
+  }));
+}
+
+/** Applies a limiter; sends 429 and returns true when the caller must stop. */
+function rateLimit(req, res, limiter, suffix) {
+  if (limiters.disabled) return false;
+  const verdict = limiter.take(clientIp(req) + (suffix ? '|' + suffix : ''));
+  if (verdict.allowed) return false;
+  send429(res, verdict);
+  return true;
+}
+
+/** Check-only: used where only *failures* should burn quota (login, PIN). */
+function limitBlocked(req, res, limiter, suffix) {
+  if (limiters.disabled) return false;
+  const verdict = limiter.peek(clientIp(req) + (suffix ? '|' + suffix : ''));
+  if (verdict.allowed) return false;
+  send429(res, verdict);
+  return true;
+}
+
+function limitCount(req, limiter, suffix) {
+  if (limiters.disabled) return;
+  limiter.take(clientIp(req) + (suffix ? '|' + suffix : ''));
+}
+
+function readRawBody(req, limit = 128 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) { req.destroy(); reject(new Error('Payload too large')); return; }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Grants the All-Access Pass for a PAID order. Idempotent: re-running it (poll,
+ * webhook replay, owner approve) never duplicates the sale ledger entry.
+ */
+function fulfillPaidOrder(order) {
+  if (!order || order.status !== payments.STATUS.PAID) return false;
+  const email = order.email;
+  if (!email) return false;
+  let changed = false;
+
+  if (!db.passHolders) db.passHolders = {};
+  if (!db.passHolders[email]) { db.passHolders[email] = true; changed = true; }
+
+  if (!Array.isArray(db.sales)) db.sales = [];
+  if (!db.sales.some((sale) => sale.orderId === order.id)) {
+    db.sales.push({
+      orderId: order.id,
+      videoId: 'pass',
+      price: order.amountPaise / 100,
+      ts: order.paidAt || Date.now(),
+      email,
+      utr: order.utr || null,
+      method: 'UPI',
+      source: order.source || 'utr'
+    });
+    changed = true;
+  }
+
+  if (changed) saveDb();
+  return true;
+}
+
+const CLAIM_ERRORS = {
+  NOT_FOUND: [404, 'Payment session not found'],
+  BAD_UTR: [400, 'Enter the 12-digit UPI reference (UTR) printed on your payment receipt'],
+  DUPLICATE_CLAIM: [400, 'That UTR was already submitted for this checkout'],
+  UTR_USED: [409, 'That UTR is already linked to another payment'],
+  TOO_MANY_ATTEMPTS: [429, 'Too many attempts for this checkout — start a new one'],
+  EXPIRED: [410, 'This checkout expired — start a new one and pay again'],
+  REJECTED: [410, 'This payment was rejected — start a new checkout'],
+  CANCELLED: [410, 'This checkout was cancelled']
+};
+
+function isUpiVpa(value) {
+  return typeof value === 'string' && /^[a-zA-Z0-9._-]{2,64}@[a-zA-Z][a-zA-Z0-9.-]{1,63}$/.test(value.trim());
+}
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -198,43 +360,91 @@ function serveStatic(req, res, pathname) {
   });
 }
 
+/**
+ * A film "owns" either its whole HLS directory or one exact file. Matching is
+ * exact/prefix based — never substring — so `hls_1` cannot unlock `hls_10`,
+ * and a token minted for one title cannot fetch another title's media.
+ */
+function mediaScope(videoUrl) {
+  if (typeof videoUrl !== 'string' || !videoUrl.startsWith('/uploads/')) return null;
+  const rel = videoUrl.slice('/uploads/'.length);
+  if (!rel) return null;
+  if (rel.endsWith('.m3u8')) {
+    const cut = rel.lastIndexOf('/');
+    return cut === -1 ? { type: 'file', value: rel } : { type: 'dir', value: rel.slice(0, cut + 1) };
+  }
+  return { type: 'file', value: rel };
+}
+
+function mediaMatches(scope, rel) {
+  if (!scope) return false;
+  return scope.type === 'dir' ? rel.startsWith(scope.value) : rel === scope.value;
+}
+
+function filmForMedia(rel) {
+  return db.catalog.find((film) => mediaMatches(mediaScope(film.video), rel)) || null;
+}
+
+function previewOwnerOf(rel) {
+  const prefix = previews.PREVIEW_DIR + '/';
+  if (!rel.startsWith(prefix)) return null;
+  return rel.slice(prefix.length).replace(/\.mp4$/i, '');
+}
+
+function denyMedia(res, status, message) {
+  res.writeHead(status, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+  res.end(JSON.stringify({ error: message }));
+}
+
+/**
+ * Media authorization:
+ *   previews/<id>.mp4  → only a token for exactly that title (or the owner)
+ *   hls/<folder>/…     → the token must belong to the film that owns the folder
+ *   videos/<file>.mp4  → exact file match
+ * Free titles stay public. Preview tokens are never valid for full media.
+ */
+function authorizeMedia(req, res, searchParams, rel) {
+  const decoded = verifyToken(extractToken(req, searchParams), db.serverSecret);
+  const isOwner = Boolean(decoded && decoded.role === 'owner');
+
+  const previewId = previewOwnerOf(rel);
+  if (previewId !== null) {
+    const ok = isOwner || Boolean(decoded &&
+      decoded.videoId === previewId &&
+      ['preview', 'paid', 'free'].includes(decoded.access));
+    if (!ok) {
+      denyMedia(res, 403, 'A preview token for this title is required');
+      return false;
+    }
+    return true;
+  }
+
+  const film = filmForMedia(rel);
+  if (!film) {
+    if (isOwner) return true;
+    denyMedia(res, 403, 'This media is not part of the catalogue');
+    return false;
+  }
+  if (Number(film.price || 0) === 0) return true;
+
+  const ownsToken = Boolean(decoded &&
+    decoded.videoId === film.id &&
+    ['paid', 'free'].includes(decoded.access));
+  if (isOwner || ownsToken) return true;
+
+  denyMedia(res, 403, 'A valid playback token for this title is required');
+  return false;
+}
+
 function serveUpload(req, res, pathname, searchParams) {
   const clean = pathname.slice('/uploads/'.length).replace(/^(\.\.[\/\\])+/, '');
   const filePath = path.join(UPLOADS_DIR, clean);
 
-  // Posters and misc non-video assets are public for catalog thumbnails
-  const isVideoMedia = clean.startsWith('videos/') || clean.startsWith('hls/');
-  if (isVideoMedia) {
-    const token = extractToken(req, searchParams);
-    const decoded = verifyToken(token, db.serverSecret);
-    const isAuthorized = decoded && (decoded.role === 'owner' || decoded.access === 'paid' || decoded.access === 'free' || decoded.access === 'preview');
-    
-    // Also allow if this media file belongs to a free catalog title
-    let hlsFolder = null;
-    if (clean.startsWith('hls/')) {
-      const parts = clean.split('/');
-      if (parts.length >= 2) hlsFolder = parts[1];
-    }
-    let videoFile = null;
-    if (clean.startsWith('videos/')) {
-      videoFile = clean.slice('videos/'.length);
-    }
-
-    const isCatalogFree = db.catalog.some(c => {
-      if (Number(c.price || 0) !== 0) return false;
-      if (!c.video) return false;
-      if (hlsFolder && c.video.includes(hlsFolder)) return true;
-      if (videoFile && c.video.includes(videoFile)) return true;
-      if (c.video.includes(clean)) return true;
-      return false;
-    });
-
-    if (!isAuthorized && !isCatalogFree) {
-      res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
-      res.end(JSON.stringify({ error: 'Unauthorized stream: valid playback token required' }));
-      return;
-    }
-  }
+  // Posters and misc non-video assets stay public for catalog thumbnails.
+  const isProtectedMedia = clean.startsWith('videos/') ||
+    clean.startsWith('hls/') ||
+    clean.startsWith(previews.PREVIEW_DIR + '/');
+  if (isProtectedMedia && !authorizeMedia(req, res, searchParams, clean)) return;
 
   fs.stat(filePath, (err, stats) => {
     if (err || !stats.isFile()) {
@@ -274,6 +484,39 @@ function serveUpload(req, res, pathname, searchParams) {
   });
 }
 
+const previewJobs = new Map();
+
+/** Local filesystem path for a catalogue title's source, or null if remote. */
+function localMediaPath(videoUrl) {
+  const scope = mediaScope(videoUrl);
+  if (!scope) return null;
+  if (scope.type === 'file') return path.join(UPLOADS_DIR, scope.value);
+  return path.join(UPLOADS_DIR, scope.value + 'master.m3u8');
+}
+
+/**
+ * Renders (once) the 45-second preview for a title. Returns null when the
+ * title has no local media or ffmpeg cannot produce a clip — callers must
+ * refuse the preview rather than fall back to the full stream.
+ */
+async function ensureFilmPreview(film) {
+  if (!film) return null;
+  if (previewJobs.has(film.id)) return previewJobs.get(film.id);
+
+  const job = (async () => {
+    const source = localMediaPath(film.video);
+    try {
+      return await previews.ensure(film.id, source, UPLOADS_DIR);
+    } catch (err) {
+      console.warn('Preview unavailable for "' + film.id + '": ' + err.message);
+      return null;
+    }
+  })().finally(() => previewJobs.delete(film.id));
+
+  previewJobs.set(film.id, job);
+  return job;
+}
+
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const pathname = reqUrl.pathname;
@@ -300,6 +543,10 @@ const server = http.createServer(async (req, res) => {
   // --- API Routes ---
   if (pathname.startsWith('/api/')) {
     try {
+      // Cheap global ceiling: a runaway client cannot hammer scrypt or the
+      // payment state machine from one address.
+      if (rateLimit(req, res, limiters.api)) return;
+
       // Health
       if (pathname === '/api/health' && method === 'GET') {
         return json(res, 200, { status: 'ok', secured: true, time: Date.now() });
@@ -327,6 +574,7 @@ const server = http.createServer(async (req, res) => {
         if (!owner) {
           return json(res, 401, { error: 'Owner authentication required for video upload' });
         }
+        if (rateLimit(req, res, limiters.upload)) return;
 
         const rawName = decodeURIComponent(req.headers['x-filename'] || 'file_' + Date.now());
         const ext = path.extname(rawName).toLowerCase() || '.mp4';
@@ -339,10 +587,29 @@ const server = http.createServer(async (req, res) => {
         fs.mkdirSync(destDir, { recursive: true });
         const targetPath = path.join(destDir, filename);
 
+        const maxBytes = Number(process.env.STREAMCOS_MAX_UPLOAD_BYTES || 4 * 1024 * 1024 * 1024);
+        let received = 0;
+        let aborted = false;
+
         const writeStream = fs.createWriteStream(targetPath);
         req.pipe(writeStream);
 
+        req.on('data', (chunk) => {
+          if (aborted) return;
+          received += chunk.length;
+          if (received > maxBytes) {
+            aborted = true;
+            writeStream.destroy();
+            try { fs.unlinkSync(targetPath); } catch (e) {}
+            json(res, 413, {
+              error: 'Upload exceeds the limit of ' + Math.round(maxBytes / (1024 * 1024)) + ' MB'
+            });
+            req.destroy();
+          }
+        });
+
         writeStream.on('finish', async () => {
+          if (aborted) return;
           const publicUrl = `/uploads/${subFolder}/${filename}`;
           let hlsUrl = null;
           let autoPoster = null;
@@ -439,6 +706,7 @@ const server = http.createServer(async (req, res) => {
 
       // Auth Register
       if (pathname === '/api/auth/register' && method === 'POST') {
+        if (rateLimit(req, res, limiters.register)) return;
         const { name, email, pass } = await readBody(req);
         const cleanEmail = (email || '').trim().toLowerCase();
         if (!cleanEmail || !pass || pass.length < 4 || !name) {
@@ -461,10 +729,12 @@ const server = http.createServer(async (req, res) => {
 
       // Auth Login
       if (pathname === '/api/auth/login' && method === 'POST') {
+        if (limitBlocked(req, res, limiters.login)) return;
         const { email, pass } = await readBody(req);
         const cleanEmail = (email || '').trim().toLowerCase();
         const user = db.users.find(u => u.email === cleanEmail);
         if (!user || !verifyPassword(pass, user.passHash, user.passSalt)) {
+          limitCount(req, limiters.login);
           return json(res, 401, { error: 'Invalid email or password' });
         }
         const token = createToken({ email: cleanEmail, name: user.name }, db.serverSecret);
@@ -490,61 +760,279 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // Payment Config GET (Public)
+      // ---------- Payments: YouPI-style UPI checkout ----------
+      const nowMs = Date.now();
+
+      // Public payment config — everything the checkout needs to draw the QR.
       if (pathname === '/api/payment/config' && method === 'GET') {
-        const cfg = db.paymentConfig || { upiId: 'streamcos@upi', merchantName: 'StreamCos Cinema', qrImage: null };
-        return json(res, 200, { ok: true, config: cfg });
+        const cfg = payments.normalizeConfig(db.paymentConfig);
+        return json(res, 200, {
+          ok: true,
+          config: payments.publicConfig(cfg),
+          links: payments.upiLinks(cfg),
+          sessionTtlMs: payments.TTL_MS
+        });
       }
 
-      // Payment Config POST (Requires Owner Token)
+      // Create (or resume) the signed-in account's single open order.
+      if (pathname === '/api/pay/orders' && method === 'POST') {
+        const user = requireUser(req, searchParams);
+        if (!user) return json(res, 401, { error: 'Sign in required to start a payment' });
+        if (rateLimit(req, res, limiters.order, user.email)) return;
+
+        const cfg = payments.normalizeConfig(db.paymentConfig);
+        const { order, reused } = payments.createOrder(db, user.email, cfg, nowMs);
+        saveDb();
+        return json(res, 201, {
+          ok: true,
+          reused,
+          order: payments.publicOrder(order, nowMs),
+          config: payments.publicConfig(cfg),
+          links: payments.upiLinks(cfg)
+        });
+      }
+
+      // Poll an order. Also re-asserts entitlement if a webhook paid it earlier.
+      if (pathname.startsWith('/api/pay/orders/') &&
+          !pathname.endsWith('/claim') && !pathname.endsWith('/cancel') &&
+          method === 'GET') {
+        const user = requireUser(req, searchParams);
+        if (!user) return json(res, 401, { error: 'Sign in required' });
+
+        const id = decodeURIComponent(pathname.slice('/api/pay/orders/'.length));
+        const order = payments.findOrder(db, id);
+        if (!order || order.email !== user.email) {
+          return json(res, 404, { error: 'Payment session not found' });
+        }
+        if (payments.sweepExpired(db, nowMs)) saveDb();
+        fulfillPaidOrder(order);
+        return json(res, 200, {
+          ok: true,
+          order: payments.publicOrder(order, nowMs),
+          hasPass: !!db.passHolders[user.email]
+        });
+      }
+
+      // Payer submits the UTR / Ref No. from their UPI receipt.
+      if (/^\/api\/pay\/orders\/[^/]+\/claim$/.test(pathname) && method === 'POST') {
+        const user = requireUser(req, searchParams);
+        if (!user) return json(res, 401, { error: 'Sign in required' });
+        if (rateLimit(req, res, limiters.claim, user.email)) return;
+
+        const id = decodeURIComponent(pathname.slice('/api/pay/orders/'.length, -'/claim'.length));
+        const order = payments.findOrder(db, id);
+        if (!order || order.email !== user.email) {
+          return json(res, 404, { error: 'Payment session not found' });
+        }
+
+        const body = await readBody(req);
+        const cfg = payments.normalizeConfig(db.paymentConfig);
+        const result = payments.claimPayment(db, order, body.utr, {
+          now: nowMs,
+          ip: clientIp(req),
+          cfg
+        });
+
+        if (result.order && result.order.status === payments.STATUS.PAID) {
+          fulfillPaidOrder(result.order);
+        }
+        saveDb();
+
+        if (!result.ok) {
+          const [status, message] = CLAIM_ERRORS[result.code] || [400, 'Payment could not be verified'];
+          return json(res, status, {
+            ok: false,
+            code: result.code,
+            error: message,
+            order: payments.publicOrder(result.order, nowMs)
+          });
+        }
+
+        return json(res, 200, {
+          ok: true,
+          code: result.code,
+          order: payments.publicOrder(result.order, nowMs),
+          hasPass: !!db.passHolders[user.email],
+          owns: (db.owns && db.owns[user.email]) || []
+        });
+      }
+
+      // Customer abandons the checkout.
+      if (/^\/api\/pay\/orders\/[^/]+\/cancel$/.test(pathname) && method === 'POST') {
+        const user = requireUser(req, searchParams);
+        if (!user) return json(res, 401, { error: 'Sign in required' });
+
+        const id = decodeURIComponent(pathname.slice('/api/pay/orders/'.length, -'/cancel'.length));
+        const order = payments.findOrder(db, id);
+        if (!order || order.email !== user.email) {
+          return json(res, 404, { error: 'Payment session not found' });
+        }
+        if (payments.OPEN_STATUSES.includes(order.status)) {
+          order.status = payments.STATUS.CANCELLED;
+          order.resolvedAt = nowMs;
+          saveDb();
+        }
+        return json(res, 200, { ok: true, order: payments.publicOrder(order, nowMs) });
+      }
+
+      // ---------- YouPI-compatible server-to-server webhook ----------
+      // Signature is HMAC-SHA256 over the RAW bytes; never trust the frontend.
+      if (pathname === '/api/youpi/webhook' && method === 'POST') {
+        const rawBody = await readRawBody(req);
+        const cfg = payments.normalizeConfig(db.paymentConfig);
+        const result = payments.handleWebhook(db, rawBody, req.headers, cfg, nowMs);
+
+        if (result.ok && result.order) {
+          fulfillPaidOrder(result.order);
+          saveDb();
+        }
+        return json(res, result.status || (result.ok ? 200 : 400), {
+          ok: result.ok,
+          code: result.code
+        });
+      }
+
+      // Owner: payment configuration (VPA, amount, verification mode, QR).
       if (pathname === '/api/admin/payment/config' && method === 'POST') {
         const owner = requireOwner(req, searchParams);
         if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
         const body = await readBody(req);
-        db.paymentConfig = Object.assign(db.paymentConfig || {}, {
-          upiId: (body.upiId || '').trim(),
-          merchantName: (body.merchantName || 'StreamCos Cinema').trim(),
-          qrImage: body.qrImage || null
-        });
-        saveDb();
-        return json(res, 200, { ok: true, config: db.paymentConfig });
-      }
+        const cfg = payments.normalizeConfig(db.paymentConfig);
 
-      // Purchase POST (Requires Authenticated User Token)
-      if (pathname === '/api/purchase' && method === 'POST') {
-        const user = requireUser(req, searchParams);
-        if (!user) {
-          return json(res, 401, { error: 'Sign in required to make purchases' });
+        if (body.vpa != null || body.upiId != null) {
+          const vpa = String(body.vpa != null ? body.vpa : body.upiId).trim();
+          if (!isUpiVpa(vpa)) return json(res, 400, { error: 'Enter a valid UPI ID like name@bank' });
+          cfg.vpa = vpa;
+          cfg.upiId = vpa;
         }
-        const { videoId, price, utr, paymentMethod } = await readBody(req);
-        const cleanEmail = user.email;
-        if (!videoId) return json(res, 400, { error: 'videoId required' });
-
-        const record = {
-          videoId,
-          price: Number(price || 0),
-          ts: Date.now(),
-          email: cleanEmail,
-          utr: utr ? String(utr).trim() : null,
-          method: paymentMethod || 'UPI'
-        };
-
-        if (videoId === 'pass') {
-          db.passHolders[cleanEmail] = true;
-          db.sales.push(record);
-        } else {
-          if (!db.owns[cleanEmail]) db.owns[cleanEmail] = [];
-          if (!db.owns[cleanEmail].includes(videoId)) {
-            db.owns[cleanEmail].push(videoId);
+        if (body.payeeName != null || body.merchantName != null) {
+          const name = String(body.payeeName != null ? body.payeeName : body.merchantName).trim();
+          if (!name) return json(res, 400, { error: 'Merchant display name is required' });
+          cfg.payeeName = name;
+          cfg.merchantName = name;
+        }
+        if (body.amountPaise != null || body.amount != null) {
+          const paise = body.amountPaise != null
+            ? Math.round(Number(body.amountPaise))
+            : Math.round(Number(body.amount) * 100);
+          if (!Number.isFinite(paise) || paise < 100 || paise > 10000000) {
+            return json(res, 400, { error: 'Amount must be between ₹1 and ₹1,00,000' });
           }
-          db.sales.push(record);
+          cfg.amountPaise = paise;
         }
+        if (body.verification != null) {
+          if (!['instant', 'manual'].includes(body.verification)) {
+            return json(res, 400, { error: 'Verification mode must be instant or manual' });
+          }
+          cfg.verification = body.verification;
+        }
+        if (body.qrImage !== undefined) {
+          const qr = body.qrImage ? String(body.qrImage) : null;
+          if (qr !== cfg.qrImage) {
+            cfg.qrImage = qr;
+            // A different file means the pinned hash/payload no longer apply.
+            cfg.qrSha256 = qr === payments.DEFAULTS.qrImage ? payments.DEFAULTS.qrSha256 : null;
+            cfg.qrPayload = qr === payments.DEFAULTS.qrImage ? payments.DEFAULTS.qrPayload : null;
+          }
+        }
+        if (body.rotateWebhookSecret) {
+          cfg.webhookSecret = payments.normalizeConfig({ webhookSecret: null }).webhookSecret;
+        }
+
+        db.paymentConfig = cfg;
         saveDb();
         return json(res, 200, {
           ok: true,
-          owns: db.owns[cleanEmail] || [],
-          hasPass: !!db.passHolders[cleanEmail],
-          record
+          config: payments.publicConfig(cfg),
+          webhookSecret: cfg.webhookSecret
+        });
+      }
+
+      // Owner: payment ledger + pending claims.
+      if (pathname === '/api/admin/payments' && method === 'GET') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
+        if (payments.sweepExpired(db, nowMs)) saveDb();
+        const cfg = payments.normalizeConfig(db.paymentConfig);
+        const orders = (db.payments || [])
+          .slice()
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .slice(0, 100)
+          .map((o) => Object.assign(payments.publicOrder(o, nowMs), { email: o.email }));
+
+        return json(res, 200, {
+          ok: true,
+          stats: payments.paymentStats(db),
+          orders,
+          config: Object.assign(payments.publicConfig(cfg), {
+            webhookSecret: cfg.webhookSecret,
+            webhookPath: '/api/youpi/webhook'
+          })
+        });
+      }
+
+      // Owner: approve or reject a claimed payment.
+      if (/^\/api\/admin\/payments\/[^/]+\/resolve$/.test(pathname) && method === 'POST') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
+        const id = decodeURIComponent(pathname.slice('/api/admin/payments/'.length, -'/resolve'.length));
+        const body = await readBody(req);
+        const action = body.action === 'approve' ? 'approve' : body.action === 'reject' ? 'reject' : null;
+        if (!action) return json(res, 400, { error: 'action must be approve or reject' });
+
+        const order = payments.findOrder(db, id);
+        if (!order) return json(res, 404, { error: 'Payment not found' });
+
+        const result = payments.resolvePayment(db, order, action, {
+          now: nowMs,
+          note: body.note ? String(body.note).slice(0, 200) : null
+        });
+        if (!result.ok) {
+          const [status, message] = CLAIM_ERRORS[result.code] || [400, 'Could not update payment'];
+          return json(res, status, { ok: false, code: result.code, error: message });
+        }
+        if (result.code === 'PAID') fulfillPaidOrder(result.order);
+        saveDb();
+        return json(res, 200, {
+          ok: true,
+          order: Object.assign(payments.publicOrder(result.order, nowMs), { email: result.order.email })
+        });
+      }
+
+      // Owner: match pasted bank-statement credits to open orders.
+      if (pathname === '/api/admin/payments/reconcile' && method === 'POST') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+        if (rateLimit(req, res, limiters.reconcile)) return;
+
+        const body = await readBody(req);
+        const text = String(body.text || '');
+        if (!text.trim()) return json(res, 400, { error: 'Paste your statement lines (or a CSV export) first' });
+
+        const result = reconcile.reconcile(db, text, Date.now());
+        for (const match of result.matched) {
+          const order = payments.findOrder(db, match.orderId);
+          if (order) fulfillPaidOrder(order);
+        }
+        if (result.matched.length) saveDb();
+
+        return json(res, 200, {
+          ok: true,
+          credits: result.credits,
+          matched: result.matched,
+          unmatched: result.unmatched,
+          stats: payments.paymentStats(db)
+        });
+      }
+
+      // Legacy endpoint: it trusted a client-supplied price and UTR, so it is
+      // retired in favour of /api/pay/orders + /claim.
+      if (pathname === '/api/purchase' && method === 'POST') {
+        return json(res, 410, {
+          error: 'Direct purchase is retired. Use /api/pay/orders and submit the UTR to /api/pay/orders/:id/claim.'
         });
       }
 
@@ -567,11 +1055,34 @@ const server = http.createServer(async (req, res) => {
         if (!videoId) return json(res, 400, { error: 'videoId required' });
 
         const film = db.catalog.find(c => c.id === videoId);
-        const isFree = !film || Number(film.price || 0) === 0;
+        if (!film) return json(res, 404, { error: 'Title not found' });
+        const isFree = Number(film.price || 0) === 0;
 
-        if (isFree || isPreview) {
-          const playToken = createToken({ videoId, access: isFree ? 'free' : 'preview' }, db.serverSecret, 4 * 3600);
-          return json(res, 200, { ok: true, playToken, videoUrl: film ? film.video : null });
+        // Free titles play as-is, and a "preview" of a free title is just the title.
+        if (isFree) {
+          const playToken = createToken({ videoId, access: 'free' }, db.serverSecret, 4 * 3600);
+          return json(res, 200, { ok: true, playToken, videoUrl: film.video });
+        }
+
+        if (isPreview) {
+          // A preview is a separate 45-second clip. If it cannot be rendered
+          // (no local source, ffmpeg missing) we refuse rather than hand over
+          // the full stream.
+          const preview = await ensureFilmPreview(film);
+          if (!preview) {
+            return json(res, 503, {
+              error: 'Preview is not available for this title — it needs local media on the StreamCos host.',
+              previewUnavailable: true
+            });
+          }
+          const playToken = createToken({ videoId, access: 'preview' }, db.serverSecret, 30 * 60);
+          return json(res, 200, {
+            ok: true,
+            playToken,
+            videoUrl: preview.url,
+            preview: true,
+            previewSeconds: previews.PREVIEW_SECONDS
+          });
         }
 
         // Owner override
@@ -612,24 +1123,67 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      // Public: tells the client whether to show "unlock" or "first-run setup".
+      // Reveals nothing beyond whether a PIN exists.
+      if (pathname === '/api/admin/owner-status' && method === 'GET') {
+        return json(res, 200, {
+          configured: Boolean(db.ownerPinHash),
+          setupRequired: !db.ownerPinHash
+        });
+      }
+
       // Admin Verify / Set PIN
+      // - entering the PIN is rate limited per client and globally, because a
+      //   4-digit space is only ~10k guesses;
+      // - the first-run PIN additionally requires the setup code printed by
+      //   the server, so an exposed fresh install cannot be claimed by a
+      //   stranger;
+      // - a forgotten PIN is recovered with `node backend/reset-pin.js`.
       if (pathname === '/api/admin/verify-pin' && method === 'POST') {
-        const { pin, newPin } = await readBody(req);
+        if (limitBlocked(req, res, limiters.pin)) return;
+        const { pin, newPin, setupCode } = await readBody(req);
+
         if (!db.ownerPinHash) {
-          if (newPin && newPin.length === 4) {
-            const p = hashPassword(newPin);
-            db.ownerPinHash = p.hash;
-            db.ownerPinSalt = p.salt;
-            saveDb();
-            const ownerToken = createToken({ role: 'owner' }, db.serverSecret, 12 * 3600);
-            return json(res, 200, { ok: true, setup: true, ownerToken });
+          if (!newPin) {
+            return json(res, 200, { ok: false, needsSetup: true, setupRequired: true });
           }
-          return json(res, 200, { ok: false, needsSetup: true });
+          if (!db.ownerSetup) {
+            limitCount(req, limiters.pin);
+            return json(res, 409, {
+              ok: false,
+              error: 'Owner setup state is missing. Run `node backend/reset-pin.js --yes` on the server.'
+            });
+          }
+          if (!ownerAuth.verifySetupCode(setupCode, db.ownerSetup)) {
+            limitCount(req, limiters.pin);
+            return json(res, 401, {
+              ok: false,
+              error: 'Setup code is missing or incorrect — it was printed in the server console.'
+            });
+          }
+          if (!/^\d{4}$/.test(String(newPin))) {
+            limitCount(req, limiters.pin);
+            return json(res, 400, { ok: false, error: 'PIN must be exactly 4 digits' });
+          }
+
+          const p = hashPassword(newPin);
+          db.ownerPinHash = p.hash;
+          db.ownerPinSalt = p.salt;
+          db.ownerSetup = null;
+          saveDb();
+          const ownerToken = createToken({ role: 'owner' }, db.serverSecret, 12 * 3600);
+          return json(res, 200, { ok: true, setup: true, ownerToken });
+        }
+
+        if (!/^\d{4}$/.test(String(pin || ''))) {
+          limitCount(req, limiters.pin);
+          return json(res, 401, { ok: false, error: 'Wrong PIN' });
         }
         if (verifyPassword(pin, db.ownerPinHash, db.ownerPinSalt)) {
           const ownerToken = createToken({ role: 'owner' }, db.serverSecret, 12 * 3600);
           return json(res, 200, { ok: true, ownerToken });
         }
+        limitCount(req, limiters.pin);
         return json(res, 401, { ok: false, error: 'Wrong PIN' });
       }
 

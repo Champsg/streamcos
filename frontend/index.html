@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
     <link rel="icon" href="icon.webp" />
-    <title>StreamCos — Premium Films, One ₹99 Pass</title>
+    <title>StreamCos — Premium Films, One ₹99.99 Pass</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -60,18 +60,18 @@
           <div class="trust">
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6z"/><path d="m9 12 2 2 4-4"/></svg>
-              <p>One ₹99 pass, no subscription<br/>Every film unlocked</p>
+              <p>One ₹99.99 pass, no subscription<br/>Every film unlocked</p>
             </div>
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
-              <p>UPI &amp; cards<br/>Demo checkout</p>
+              <p>Instant UPI unlock<br/>YouPI gateway</p>
             </div>
             <div>
               <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 19h16"/></svg>
               <p>Watch instantly<br/>Any phone</p>
             </div>
           </div>
-          <p class="foot-note">Starter catalogue: award-winning open films by the Blender Institute, shared under Creative Commons. The owner adds their own films from the Owner Studio.<br/>One ₹99 All-Access Pass unlocks every film — watch any time on this device.</p>
+          <p class="foot-note">Starter catalogue: award-winning open films by the Blender Institute, shared under Creative Commons. The owner adds their own films from the Owner Studio.<br/>One ₹99.99 All-Access Pass unlocks every film — watch any time on this device.</p>
         </section>
 
         <!-- ============ LIBRARY ============ -->
@@ -140,8 +140,8 @@
         <div class="preview-end" id="previewEnd">
           <div>
             <h3>Preview ended</h3>
-            <p>That was the free 45-second preview.<br/>One ₹99 All-Access Pass unlocks every film in full, forever.</p>
-            <button class="btn acc" id="previewBuyBtn" style="max-width:240px; margin:0 auto;">Unlock all · ₹99</button>
+            <p>That was the free 45-second preview.<br/>One ₹99.99 All-Access Pass unlocks every film in full, forever.</p>
+            <button class="btn acc" id="previewBuyBtn" style="max-width:240px; margin:0 auto;">Unlock all · ₹99.99</button>
             <button class="btn ghost sm" id="previewReplayBtn" style="max-width:240px; margin:10px auto 0;">↺ Replay preview</button>
           </div>
         </div>
@@ -151,7 +151,10 @@
     <div class="toast" id="toast"></div>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/plyr@3.7.8/dist/plyr.polyfilled.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+    <!-- Backend location. Rewritten by `npm run config:url` and by start.js;
+         an empty apiBase means "same origin", which is right when the backend
+         itself serves this page. -->
+    <script src="runtime-config.js"></script>
     <script src="js/app.js"></script>
   </body>
 </html>

@@ -17,91 +17,6 @@
       "poster": "/uploads/posters/photo_6246881369573234054_y_1792488671562.jpg",
       "video": "/uploads/hls/hls_mvghgypj/master.m3u8",
       "desc": "A film from the StreamCos owner."
-    },
-    {
-      "id": "sintel",
-      "title": "Sintel",
-      "year": 2010,
-      "mins": 15,
-      "rating": "8.1",
-      "quality": "4K",
-      "category": "Fantasy",
-      "price": 299,
-      "oldPrice": 499,
-      "views": 18400,
-      "featured": true,
-      "published": true,
-      "poster": "assets/poster-sintel.jpg",
-      "video": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-      "desc": "A lonely young wanderer crosses a frozen wasteland searching for Scales, the baby dragon she once rescued and lost. Colin Levy's wordless fantasy about love, obsession and letting go — the Blender Institute film that proved open-source cinema could break hearts."
-    },
-    {
-      "id": "tears-of-steel",
-      "title": "Tears of Steel",
-      "year": 2012,
-      "mins": 12,
-      "rating": "7.4",
-      "quality": "HD",
-      "category": "Sci-Fi",
-      "price": 249,
-      "oldPrice": 399,
-      "views": 15200,
-      "featured": false,
-      "published": true,
-      "poster": "assets/poster-tears-of-steel.jpg",
-      "video": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-      "desc": "Forty years after giant machines tore Amsterdam apart, a group of scientists and robots restages the day it all went wrong — hoping a perfect re-enactment can rewrite the past and save humanity's future."
-    },
-    {
-      "id": "spring",
-      "title": "Spring",
-      "year": 2019,
-      "mins": 8,
-      "rating": "7.9",
-      "quality": "4K",
-      "category": "Fantasy",
-      "price": 199,
-      "oldPrice": 299,
-      "views": 12800,
-      "featured": false,
-      "published": true,
-      "poster": "assets/poster-spring.jpg",
-      "video": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-      "desc": "High in the mountains, a shepherd girl and her loyal dog must face the ancient spirits of the forest to coax the season back to life. A poetic, dialogue-free fantasy painted in light and mist. (Preview streams a companion Blender short.)"
-    },
-    {
-      "id": "agent-327",
-      "title": "Agent 327: Operation Barbershop",
-      "year": 2017,
-      "mins": 4,
-      "rating": "7.8",
-      "quality": "HD",
-      "category": "Comedy",
-      "price": 149,
-      "oldPrice": 249,
-      "views": 9700,
-      "featured": false,
-      "published": true,
-      "poster": "assets/poster-agent-327.jpg",
-      "video": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-      "desc": "Hendrik IJzerbroot — Agent 327, Holland's most accident-prone secret agent — pops into a barbershop for a quick trim and walks straight into a trap. Three and a half minutes of gadgets, disguises and perfectly timed slapstick."
-    },
-    {
-      "id": "big-buck-bunny",
-      "title": "Big Buck Bunny",
-      "year": 2008,
-      "mins": 10,
-      "rating": "7.6",
-      "quality": "HD",
-      "category": "Family",
-      "price": 0,
-      "oldPrice": 0,
-      "views": 22100,
-      "featured": false,
-      "published": true,
-      "poster": "assets/poster-big-buck-bunny.jpg",
-      "video": "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-      "desc": "The gentle giant of the forest loves butterflies, berries and quiet mornings — until three bullying rodents push him one prank too far. The Blender Institute's beloved slapstick family comedy. Free for everyone, forever."
     }
   ],
   "users": [
@@ -209,6 +124,41 @@
       "passHash": "11613788c254d95aec8068ccbe1a4f9d9c2a5f25e88fb770ac5eee08a9aca8c4",
       "passSalt": "e49627fd906845623df4f253e5ce1fb4",
       "joined": 1792491919086
+    },
+    {
+      "name": "John",
+      "email": "john@test.com",
+      "passHash": "86dfb2d3c1f16e6bf62b9dc8f432b9933caf7d524b0e7744f7c4b415bac7d08e",
+      "passSalt": "84f7aa52bd99b4b522d4d0d970ff6f61",
+      "joined": 1792496402800
+    },
+    {
+      "name": "Test",
+      "email": "test@gmail.com",
+      "passHash": "9d228d683adb11460027ec468a20f013ff4c3b6a3e9c2c90b0729dec764f2639",
+      "passSalt": "17e6a787a88fa0e4ad922981e1e295e7",
+      "joined": 1792496815753
+    },
+    {
+      "name": "Test User",
+      "email": "tester_1792497276839@test.com",
+      "passHash": "ea879f29efa8d01981e205e27bd7cc26fb7e85daa405974ff7e8f73793441c86",
+      "passSalt": "f1286f064156d4c379a4ec6cfded1939",
+      "joined": 1792497276872
+    },
+    {
+      "name": "Test User",
+      "email": "tester_1792497286456@test.com",
+      "passHash": "ce2d4a5e98bf4c0a3d6a2a60ff50b9bf6ed0bc077187f80bfea5c601f20f68b2",
+      "passSalt": "7bffeca43148338e9be1598bde049cbf",
+      "joined": 1792497286488
+    },
+    {
+      "name": "Test User",
+      "email": "tester_1792501543325@test.com",
+      "passHash": "511879000200ef23dad7f37282a3eb85b9c877ac75c95505a8ece19ea6205e84",
+      "passSalt": "05a21d3c53c6dee3e4ce97c526a35144",
+      "joined": 1792501543382
     }
   ],
   "owns": {},
@@ -227,7 +177,12 @@
     "tester_1792488535635@test.com": true,
     "tester_1792489674198@test.com": true,
     "tester_1792490182458@test.com": true,
-    "tester_1792491919042@test.com": true
+    "tester_1792491919042@test.com": true,
+    "john@test.com": true,
+    "test@gmail.com": true,
+    "tester_1792497276839@test.com": true,
+    "tester_1792497286456@test.com": true,
+    "tester_1792501543325@test.com": true
   },
   "progress": {
     "tester_1792482298999@test.com": {
@@ -315,6 +270,18 @@
       }
     },
     "tester_1792491919042@test.com": {
+      "sintel": {
+        "t": 45,
+        "d": 900
+      }
+    },
+    "tester_1792497276839@test.com": {
+      "sintel": {
+        "t": 45,
+        "d": 900
+      }
+    },
+    "tester_1792497286456@test.com": {
       "sintel": {
         "t": 45,
         "d": 900
@@ -411,13 +378,81 @@
       "price": 99,
       "ts": 1792491919135,
       "email": "tester_1792491919042@test.com"
+    },
+    {
+      "videoId": "pass",
+      "price": 99,
+      "ts": 1792496408394,
+      "email": "john@test.com",
+      "utr": "412356789012",
+      "method": "UPI_YOUPI"
+    },
+    {
+      "videoId": "pass",
+      "price": 99,
+      "ts": 1792496836409,
+      "email": "test@gmail.com",
+      "utr": "856987569875",
+      "method": "UPI_YOUPI"
+    },
+    {
+      "orderId": "SC-MVGP4YRF-A88A5F",
+      "videoId": "pass",
+      "price": 99.99,
+      "ts": 1792501543423,
+      "email": "tester_1792501543325@test.com",
+      "utr": "501543423271",
+      "method": "UPI",
+      "source": "utr"
     }
   ],
+  "payments": [
+    {
+      "id": "SC-MVGP4YRF-A88A5F",
+      "email": "tester_1792501543325@test.com",
+      "sku": "pass",
+      "skuName": "StreamCos All-Access Pass",
+      "amountPaise": 9999,
+      "currency": "INR",
+      "vpa": "muskaanlimited379042.rzp@rxairtel",
+      "status": "PAID",
+      "createdAt": 1792501543419,
+      "expiresAt": 1792501843419,
+      "paidAt": 1792501543423,
+      "utr": "501543423271",
+      "source": "utr",
+      "claims": [
+        {
+          "utr": "501543423271",
+          "at": 1792501543423,
+          "ip": "::ffff:127.0.0.1"
+        }
+      ],
+      "note": null,
+      "ip": null
+    }
+  ],
+  "webhookDeliveries": [],
   "ownerPinHash": "4b948d83b3ab6335102081a65dcad4b85ffc236fcf0e2c127144ffeacb8535e4",
   "ownerPinSalt": "93ec2bbad38c5d6e7d1fe0d94c78e9a4",
+  "ownerSetup": null,
   "paymentConfig": {
-    "upiId": "streamcos@upi",
-    "merchantName": "StreamCos Cinema",
-    "qrImage": null
+    "upiId": "muskaanlimited379042.rzp@rxairtel",
+    "merchantName": "Muskaan Limited",
+    "qrImage": "assets/youpi-qr.png",
+    "vpa": "muskaanlimited379042.rzp@rxairtel",
+    "payeeName": "Muskaan Limited",
+    "sku": "pass",
+    "skuName": "StreamCos All-Access Pass",
+    "currency": "INR",
+    "merchantCategoryCode": "5621",
+    "mode": "19",
+    "tr": "Tq9OXXUU2VmlTVqrv2",
+    "note": "StreamCos All-Access Pass",
+    "qrSha256": "39a5d83cd22237b9e4f2043bae988d486ea8e243e298ba5793ab324ae97681be",
+    "qrPayload": "upi://pay?am=99.99&cu=INR&mc=5621&mode=19&pa=muskaanlimited379042.rzp@rxairtel&tn=Payment%20To%20Muskaan%20Limited&tr=Tq9OXXUU2VmlTVqrv2",
+    "verification": "instant",
+    "amountPaise": 9999,
+    "webhookSecret": "whsec_bfb56ed3fbcd9e2f47ce4370d091de818abe49086478eecb"
   }
 }

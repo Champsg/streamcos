@@ -1,6 +1,14 @@
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
+
+const os = require('os');
+
+const TMP_DB = path.join(os.tmpdir(), `streamcos-test-${process.pid}.json`);
+process.env.STREAMCOS_DATA_FILE = TMP_DB;
+process.env.STREAMCOS_RATE_LIMIT = 'off';
+process.env.STREAMCOS_SETUP_CODE = 'TESTSETUP';
+
 const server = require('./server');
 
 const TEST_PORT = 5099;
@@ -23,7 +31,7 @@ async function runTests() {
     const resCat = await fetch(`${BASE_URL}/api/catalog`);
     assert.strictEqual(resCat.status, 200);
     const catData = await resCat.json();
-    assert(Array.isArray(catData.catalog) && catData.catalog.length >= 6, 'Catalog should have at least 6 starter films');
+    assert(Array.isArray(catData.catalog) && catData.catalog.length >= 1, 'Catalog should return at least one title');
     console.log(`✔ Catalog endpoint passed (${catData.catalog.length} films found)`);
 
     // 3. User Register & Login (Salted scrypt hash + token issuance)
@@ -62,24 +70,38 @@ async function runTests() {
     assert.strictEqual(userData.hasPass, false);
     console.log('✔ User data security boundary passed (tamper-proof)');
 
-    // 5. Purchase Pass (Requires authenticated token)
-    const resUnauthBuy = await fetch(`${BASE_URL}/api/purchase`, {
+    // 5. UPI checkout: server-side order + UTR claim (Requires authenticated token)
+    const resUnauthBuy = await fetch(`${BASE_URL}/api/pay/orders`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId: 'pass', price: 99 })
+      body: JSON.stringify({ sku: 'pass' })
     });
-    assert.strictEqual(resUnauthBuy.status, 401, 'Unauthenticated purchase must be blocked');
+    assert.strictEqual(resUnauthBuy.status, 401, 'Unauthenticated checkout must be blocked');
 
-    const resBuy = await fetch(`${BASE_URL}/api/purchase`, {
+    const resOrder = await fetch(`${BASE_URL}/api/pay/orders`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${userToken}`
       },
-      body: JSON.stringify({ videoId: 'pass', price: 99 })
+      body: JSON.stringify({ sku: 'pass' })
+    });
+    assert.strictEqual(resOrder.status, 201);
+    const orderData = await resOrder.json();
+    assert.strictEqual(orderData.order.amountPaise, 9999, 'Price is decided by the server / merchant QR');
+
+    const utr = String(Date.now()).slice(-9) + String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+    const resBuy = await fetch(`${BASE_URL}/api/pay/orders/${orderData.order.id}/claim`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${userToken}`
+      },
+      body: JSON.stringify({ utr })
     });
     assert.strictEqual(resBuy.status, 200);
     const buyData = await resBuy.json();
+    assert.strictEqual(buyData.order.status, 'PAID');
     assert.strictEqual(buyData.hasPass, true);
 
     const resVerifiedData = await fetch(`${BASE_URL}/api/user/data`, {
@@ -126,14 +148,22 @@ async function runTests() {
     assert.strictEqual(resProg.status, 200);
     console.log('✔ Authenticated progress tracking passed');
 
-    // 8. Admin PIN Check & Owner Token
+    // 8. Admin PIN Check & Owner Token (creates the PIN on a fresh store)
     const resPinCheck = await fetch(`${BASE_URL}/api/admin/verify-pin`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pin: '1234' })
     });
     assert.strictEqual(resPinCheck.status, 200);
-    const pinData = await resPinCheck.json();
+    let pinData = await resPinCheck.json();
+    if (pinData.needsSetup) {
+      const resPinSet = await fetch(`${BASE_URL}/api/admin/verify-pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newPin: '1234', setupCode: 'TESTSETUP' })
+      });
+      pinData = await resPinSet.json();
+    }
     assert(pinData.ownerToken, 'Valid PIN must issue ownerToken');
     const ownerToken = pinData.ownerToken;
     console.log('✔ Admin PIN check and Owner Token generation passed');
@@ -182,7 +212,11 @@ async function runTests() {
       const hlsData = await resHlsUp.json();
       assert(hlsData.hlsUrl && hlsData.hlsUrl.endsWith('master.m3u8'), 'Should return master.m3u8 URL');
 
-      const resMaster = await fetch(`${BASE_URL}${hlsData.hlsUrl}?token=${encodeURIComponent(paidPlayData.playToken)}`);
+      // Media is bound to its film, so fetch the fresh upload with the owner
+      // token (a pass token for another title must not unlock it).
+      const resMaster = await fetch(`${BASE_URL}${hlsData.hlsUrl}`, {
+        headers: { 'Authorization': `Bearer ${ownerToken}` }
+      });
       assert.strictEqual(resMaster.status, 200);
       const masterBody = await resMaster.text();
       assert(masterBody.includes('#EXTM3U') && masterBody.includes('EXT-X-STREAM-INF'), 'Playlist should be valid HLS');
@@ -207,6 +241,7 @@ async function runTests() {
     console.log('\nAll Ponytail security & backend self-checks PASSED successfully (14/14 assertions).');
   } finally {
     server.close();
+    try { if (fs.existsSync(TMP_DB)) fs.unlinkSync(TMP_DB); } catch (e) {}
   }
 }
 

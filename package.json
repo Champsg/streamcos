@@ -7,7 +7,12 @@
     "start": "node start.js",
     "server": "node backend/server.js",
     "tunnel": "cloudflared tunnel --url http://localhost:5000",
-    "test": "node backend/test.js"
+    "test": "node backend/test.js && node backend/test-payments.js && node backend/test-hardening.js",
+    "test:payments": "node backend/test-payments.js",
+    "test:hardening": "node backend/test-hardening.js",
+    "test:ui": "node scripts/ui-smoke.js",
+    "config:url": "node scripts/set-api-base.js",
+    "reset:pin": "node backend/reset-pin.js"
   },
   "keywords": ["video", "streaming", "node"],
   "author": "",

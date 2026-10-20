@@ -18,3 +18,11 @@ backend/uploads/posters/*
 !backend/uploads/posters/.gitkeep
 backend/uploads/misc/*
 !backend/uploads/misc/.gitkeep
+
+# Headless-browser screenshots produced by scripts/ui-smoke.js
+scripts/ui-shots/
+
+# Store backups / crash artefacts and the last known tunnel hostname
+backend/*.bak
+backend/*.corrupt-*
+.streamcos-tunnel.json
