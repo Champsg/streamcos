@@ -414,5 +414,10 @@
     }
   ],
   "ownerPinHash": "4b948d83b3ab6335102081a65dcad4b85ffc236fcf0e2c127144ffeacb8535e4",
-  "ownerPinSalt": "93ec2bbad38c5d6e7d1fe0d94c78e9a4"
+  "ownerPinSalt": "93ec2bbad38c5d6e7d1fe0d94c78e9a4",
+  "paymentConfig": {
+    "upiId": "streamcos@upi",
+    "merchantName": "StreamCos Cinema",
+    "qrImage": null
+  }
 }

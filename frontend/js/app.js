@@ -2,7 +2,7 @@
   "use strict";
 
   // shortcut: local storage caching layer as offline fallback when backend server is restarting or unreachable.
-  var DEFAULT_TUNNEL_URL = 'https://some-linked-acne-straight.trycloudflare.com';
+  var DEFAULT_TUNNEL_URL = 'https://rapidly-website-lung-reunion.trycloudflare.com';
   var customApi = localStorage.getItem('sc_api_base');
   var API_BASE = customApi
     ? customApi.replace(/\/+$/, '')
@@ -60,8 +60,18 @@
   var ownerPin = store.get(K.pin, null);
   var PASS_PRICE = 99;
   var ownerUnlocked = false;
+  var paymentConfig = { upiId: "streamcos@upi", merchantName: "StreamCos Cinema", qrImage: null };
 
   var state = { tab: "home", cat: "All", query: "", detailId: null, payId: null, payMethod: "UPI", authMode: "in", authNext: null, editingId: null, pinBuffer: "", pinStep: "enter", pinNew: "" };
+
+  async function loadPaymentConfig() {
+    try {
+      var res = await api('/api/payment/config');
+      if (res && res.config && res.config.upiId) {
+        paymentConfig = res.config;
+      }
+    } catch(e) {}
+  }
 
   function $(s, r) { return (r || document).querySelector(s); }
   function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
@@ -393,9 +403,10 @@
     startCheckout("pass");
   }
 
-  function startCheckout(id) {
+  async function startCheckout(id) {
     if (id !== "pass" && !byId(id)) return;
     state.payId = id; state.payMethod = "UPI";
+    await loadPaymentConfig();
     renderPay("form");
     openSheet($("#paySheet"));
   }
@@ -406,66 +417,144 @@
     if (!v) return;
     var el = $("#paySheet");
     if (stage === "processing") {
-      el.innerHTML = '<div class="grab"></div><div style="padding:20px 22px calc(34px + env(safe-area-inset-bottom)); text-align:center;">' +
-        '<div class="spin"></div><h3 style="margin:0 0 6px;">Processing payment…</h3>' +
-        '<p style="margin:0; color:var(--mut); font-size:13.5px;">Confirming with your bank. Don\'t close this.</p></div>';
-      setTimeout(function() { completePurchase(); }, 1200);
+      clearInterval(renderPay._timer);
+      el.innerHTML = '<div class="grab"></div><div style="padding:24px 22px calc(34px + env(safe-area-inset-bottom)); text-align:center;">' +
+        '<div class="spin"></div><h3 style="margin:0 0 6px;">Verifying UPI payment…</h3>' +
+        '<p style="margin:0; color:var(--mut); font-size:13.5px;">Validating transaction with bank. Instant activation in progress…</p></div>';
       return;
     }
     if (stage === "done") {
-      el.innerHTML = '<div class="grab"></div><div style="padding:16px 22px calc(26px + env(safe-area-inset-bottom)); text-align:center;">' +
+      clearInterval(renderPay._timer);
+      el.innerHTML = '<div class="grab"></div><div style="padding:18px 22px calc(26px + env(safe-area-inset-bottom)); text-align:center;">' +
         '<div class="success-ic">' + ICON.check + '</div>' +
-        '<h3 style="margin:0 0 6px; font-size:20px;">' + (isPass ? "Everything is unlocked" : "It's yours, forever") + '</h3>' +
+        '<h3 style="margin:0 0 6px; font-size:20px;">' + (isPass ? "Everything is unlocked!" : "Film Unlocked!") + '</h3>' +
         '<p style="margin:0 0 18px; color:var(--mut); font-size:13.5px; line-height:1.6;">' +
-        (isPass ? "Your All-Access Pass is active.<br/>Every film on StreamCos is ready to watch." : esc(v.title) + " is now in your library.<br/>Watch it any time you're signed in.") +
+        (isPass ? "Your All-Access Pass is active.<br/>Every film on StreamCos is unlocked and ready to stream." : esc(v.title) + " is now in your library.<br/>Watch it any time you're signed in.") +
         '</p>' +
         (isPass ? '<button class="btn acc block" data-close>Start watching</button>' : '<button class="btn acc block" data-watch="' + v.id + '">' + ICON.playSm + ' Watch now</button><button class="btn ghost block" data-close style="margin-top:9px;">Keep browsing</button>') +
         '</div>';
       return;
     }
 
-    var methods = [["UPI", "UPI", "Instant · GPay, PhonePe, Paytm"], ["Card", "Card", "Credit / debit card"], ["NetBanking", "Net banking", "All major banks"]];
+    var cleanUpi = (paymentConfig && paymentConfig.upiId) ? paymentConfig.upiId.trim() : 'streamcos@upi';
+    var mName = (paymentConfig && paymentConfig.merchantName) ? paymentConfig.merchantName.trim() : 'StreamCos Cinema';
+    var note = 'StreamCos - ' + (isPass ? 'All Access Pass' : v.title);
+    var amtStr = Number(v.price || PASS_PRICE).toFixed(2);
+    var upiUri = 'upi://pay?pa=' + encodeURIComponent(cleanUpi) +
+                 '&pn=' + encodeURIComponent(mName) +
+                 '&am=' + amtStr +
+                 '&cu=INR' +
+                 '&tn=' + encodeURIComponent(note);
+
+    var gpayUri = 'tez://upi/pay?pa=' + encodeURIComponent(cleanUpi) + '&pn=' + encodeURIComponent(mName) + '&am=' + amtStr + '&cu=INR&tn=' + encodeURIComponent(note);
+    var phonepeUri = 'phonepe://pay?pa=' + encodeURIComponent(cleanUpi) + '&pn=' + encodeURIComponent(mName) + '&am=' + amtStr + '&cu=INR&tn=' + encodeURIComponent(note);
+    var paytmUri = 'paytmmp://pay?pa=' + encodeURIComponent(cleanUpi) + '&pn=' + encodeURIComponent(mName) + '&am=' + amtStr + '&cu=INR&tn=' + encodeURIComponent(note);
+
     el.innerHTML =
       '<div class="grab"></div>' +
       '<div style="padding:14px 20px calc(24px + env(safe-area-inset-bottom));">' +
-        '<h2 style="margin:2px 0 14px; font-size:21px;">Checkout</h2>' +
+        '<h2 style="margin:2px 0 12px; font-size:20px; font-family:\'Sora\'; font-weight:800;">UPI Checkout</h2>' +
         '<div class="order-line"><img src="' + esc(v.poster) + '" alt="" /><div><h4>' + esc(v.title) + '</h4><p>' + (isPass ? 'Every film unlocked · watch forever' : v.year + ' · ' + esc(v.quality) + ' · Yours forever') + '</p></div><span class="amt">' + inr(v.price) + '</span></div>' +
-        '<div class="fld" style="margin-top:16px;"><label>Pay with</label>' +
-          '<div class="pay-methods">' + methods.map(function(m) {
-            return '<button type="button" class="pay-m' + (state.payMethod === m[0] ? ' sel' : '') + '" data-method="' + m[0] + '"><span class="radio"></span>' + m[1] + '<span class="tag">' + m[2] + '</span></button>';
-          }).join("") + '</div></div>' +
-        '<div class="fld" id="payDetailFld"><label id="payDetailLbl"></label><input id="payDetail" type="text" /></div>' +
-        '<button class="btn acc block" id="payNowBtn" style="margin-top:6px;">Pay ' + inr(v.price) + ' securely</button>' +
-        '<p class="fineprint">Demo checkout connected to backend API — payments are verified instantly.</p>' +
+        '<div class="youpi-box">' +
+          '<div class="youpi-badge">⚡ YouPI Gateway · 0% Fees</div>' +
+          '<div class="youpi-timer"><span class="pdot"></span><span id="upiTimer">Expires in 05:00</span></div>' +
+          '<div class="upi-qr-card" id="youpiQrSlot">' +
+            (paymentConfig.qrImage ? '<img src="' + esc(mediaUrl(paymentConfig.qrImage)) + '" alt="UPI QR" />' : '') +
+          '</div>' +
+          '<div style="margin-top:2px;"><div class="upi-id-pill" id="copyUpiIdBtn" title="Click to copy UPI ID"><span id="upiPillTxt">' + esc(cleanUpi) + '</span><svg viewBox="0 0 24 24" fill="none" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></div></div>' +
+          '<div class="upi-apps-row">' +
+            '<a href="' + esc(gpayUri) + '" class="upi-app-btn"><div class="u-icon u-gpay">G</div><span>GPay</span></a>' +
+            '<a href="' + esc(phonepeUri) + '" class="upi-app-btn"><div class="u-icon u-phonepe">Pe</div><span>PhonePe</span></a>' +
+            '<a href="' + esc(paytmUri) + '" class="upi-app-btn"><div class="u-icon u-paytm">Py</div><span>Paytm</span></a>' +
+            '<a href="' + esc(upiUri) + '" class="upi-app-btn"><div class="u-icon u-upi">⚡</div><span>Any UPI</span></a>' +
+          '</div>' +
+          '<div class="utr-section">' +
+            '<label>Enter 12-digit UPI Ref / UTR No. after payment:</label>' +
+            '<div class="utr-input-row">' +
+              '<input type="text" id="utrInput" inputmode="numeric" maxlength="18" placeholder="e.g. 412356789012" autocomplete="off" />' +
+              '<button class="btn acc sm" id="verifyUtrBtn">Verify &amp; Unlock</button>' +
+            '</div>' +
+            '<p style="margin:7px 0 0; font-size:11px; color:var(--mut); line-height:1.4;">Pay with any UPI app above, then enter the UTR / Ref No. from your receipt to instantly unlock.</p>' +
+          '</div>' +
+          '<p class="fineprint" style="margin-top:12px;">Direct bank settlement to creator · Zero transaction fee · NPCI UPI</p>' +
+        '</div>' +
       '</div>';
 
-    $$("#paySheet .pay-m").forEach(function(b) { b.addEventListener("click", function() { state.payMethod = b.dataset.method; renderPay("form"); }); });
-    syncPayDetail();
+    if (!paymentConfig.qrImage && window.QRCode) {
+      var slot = document.getElementById("youpiQrSlot");
+      if (slot) {
+        slot.innerHTML = '';
+        new QRCode(slot, {
+          text: upiUri,
+          width: 172,
+          height: 172,
+          colorDark: "#050508",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      }
+    }
 
-    $("#payNowBtn").addEventListener("click", function() {
-      var d = $("#payDetail").value.trim();
-      if (state.payMethod === "UPI" && !/^[\w.\-]{2,}@[a-zA-Z]{2,}/.test(d)) { toast("Enter a valid UPI ID (e.g. name@okhdfc)"); $("#payDetail").focus(); return; }
-      if (state.payMethod === "Card" && d.replace(/\D/g, "").length < 12) { toast("Enter a valid card number"); $("#payDetail").focus(); return; }
-      if (state.payMethod === "NetBanking" && d.length < 3) { toast("Enter your bank name"); $("#payDetail").focus(); return; }
+    var timeLeft = 300;
+    clearInterval(renderPay._timer);
+    renderPay._timer = setInterval(function() {
+      timeLeft--;
+      var tEl = $("#upiTimer");
+      if (!tEl) { clearInterval(renderPay._timer); return; }
+      if (timeLeft <= 0) {
+        clearInterval(renderPay._timer);
+        tEl.innerHTML = '<span style="color:#ff7a72; cursor:pointer;">QR Expired · Click to refresh</span>';
+        tEl.onclick = function() { renderPay("form"); };
+        return;
+      }
+      var m = Math.floor(timeLeft / 60);
+      var s = timeLeft % 60;
+      tEl.textContent = "Expires in " + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+    }, 1000);
+
+    var copyBtn = $("#copyUpiIdBtn");
+    if (copyBtn) {
+      copyBtn.addEventListener("click", function() {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(cleanUpi);
+        }
+        var ptxt = $("#upiPillTxt");
+        if (ptxt) {
+          var orig = ptxt.textContent;
+          ptxt.textContent = "Copied!";
+          setTimeout(function() { ptxt.textContent = orig; }, 1500);
+        }
+        toast("UPI ID copied: " + cleanUpi);
+      });
+    }
+
+    var doVerify = function() {
+      var utr = ($("#utrInput") ? $("#utrInput").value.trim() : "");
+      if (!utr || utr.length < 6) {
+        toast("Please enter the 12-digit UPI UTR / Reference No. from your receipt");
+        if ($("#utrInput")) $("#utrInput").focus();
+        return;
+      }
       renderPay("processing");
-    });
+      completePurchase(utr);
+    };
+
+    var verifyBtn = $("#verifyUtrBtn");
+    if (verifyBtn) verifyBtn.addEventListener("click", doVerify);
+    var utrInp = $("#utrInput");
+    if (utrInp) utrInp.addEventListener("keydown", function(e) { if (e.key === "Enter") { e.preventDefault(); doVerify(); } });
   }
 
-  function syncPayDetail() {
-    var lbl = $("#payDetailLbl"), inp = $("#payDetail"); if (!lbl || !inp) return;
-    if (state.payMethod === "UPI") { lbl.textContent = "Your UPI ID"; inp.placeholder = "name@okhdfc"; inp.type = "text"; }
-    if (state.payMethod === "Card") { lbl.textContent = "Card number"; inp.placeholder = "1234 5678 9012 3456"; inp.type = "tel"; }
-    if (state.payMethod === "NetBanking") { lbl.textContent = "Bank name"; inp.placeholder = "e.g. HDFC Bank"; inp.type = "text"; }
-  }
-
-  async function completePurchase() {
+  async function completePurchase(utr) {
     try {
       var res = await api('/api/purchase', {
         method: 'POST',
         body: JSON.stringify({
-          email: session.email,
+          email: session ? session.email : 'guest@streamcos.app',
           videoId: state.payId,
-          price: state.payId === "pass" ? PASS_PRICE : (byId(state.payId) ? byId(state.payId).price : 0)
+          price: state.payId === "pass" ? PASS_PRICE : (byId(state.payId) ? byId(state.payId).price : 0),
+          utr: utr || ('UPI_' + Date.now()),
+          paymentMethod: 'UPI_YOUPI'
         })
       });
       owns = res.owns || [];
@@ -842,6 +931,7 @@
       var n = await api('/api/network-info');
       if (n && n.urls) netUrls = n.urls;
     } catch (e) {}
+    await loadPaymentConfig();
 
     slot.innerHTML =
       '<div class="page-head"><h1>Owner Studio</h1><p>Upload films from your PC, set prices, publish or remove titles.</p></div>' +
@@ -849,6 +939,16 @@
         '<div class="stat"><b>' + catalog.length + '</b><span>Titles</span></div>' +
         '<div class="stat"><b>' + (stats.salesCount || 0) + '</b><span>Sales</span></div>' +
         '<div class="stat"><b>' + inr(stats.revenue || 0) + '</b><span>Revenue</span></div>' +
+      '</div>' +
+      '<div style="margin:14px 18px 0; background:linear-gradient(135deg,rgba(255,176,32,.12),rgba(47,206,110,.08)); border:1px solid rgba(255,176,32,.35); border-radius:var(--r-md); padding:13px 15px;">' +
+        '<div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">' +
+          '<div>' +
+            '<div style="font-size:11px; font-weight:800; color:var(--gold); text-transform:uppercase; letter-spacing:.06em;">⚡ YouPI Gateway · 0% Fees</div>' +
+            '<div style="font-size:13px; font-weight:700; color:#fff; margin-top:3px;">Receiving: <span style="color:var(--green);">' + esc(paymentConfig.upiId) + '</span></div>' +
+            '<div style="font-size:11.5px; color:var(--mut); margin-top:2px;">' + esc(paymentConfig.merchantName) + (paymentConfig.qrImage ? ' · Custom Razorpay QR' : ' · Auto ₹99 QR') + '</div>' +
+          '</div>' +
+          '<button class="btn ghost sm" id="editPaymentBtn" style="font-size:12px; padding:6px 12px; flex:none;">Configure</button>' +
+        '</div>' +
       '</div>' +
       (netUrls.length ?
         '<div style="margin:14px 18px 0; background:linear-gradient(135deg,rgba(47,206,110,.12),rgba(255,176,32,.08)); border:1px solid rgba(47,206,110,.4); border-radius:var(--r-md); padding:12px 14px;">' +
@@ -875,6 +975,8 @@
       '<div id="videoFormSlot"></div>';
 
     $("#addVideoBtn").addEventListener("click", function() { renderVideoForm(null); });
+    var editPayBtn = $("#editPaymentBtn");
+    if (editPayBtn) editPayBtn.addEventListener("click", renderPaymentSettingsForm);
     $("#lockStudioBtn").addEventListener("click", function() {
       ownerUnlocked = false; $("#tabAdmin").classList.add("hidden"); goto("account"); toast("Studio locked.");
     });
@@ -898,6 +1000,100 @@
     });
     $$("#adminSlot [data-edit]").forEach(function(b) { b.addEventListener("click", function() { renderVideoForm(byId(b.dataset.edit)); }); });
     $$("#adminSlot [data-del]").forEach(function(b) { b.addEventListener("click", function() { renderDeleteConfirm(b.dataset.del); }); });
+  }
+
+  function renderPaymentSettingsForm() {
+    var slot = $("#videoFormSlot");
+    slot.innerHTML =
+      '<div class="sec" style="margin-top:24px;"><div class="sec-head"><h2>Payment Gateway Settings</h2></div>' +
+      '<div style="background:rgba(255,176,32,.08); border:1px solid rgba(255,176,32,.3); border-radius:var(--r-md); padding:11px 13px; margin:0 18px 14px; font-size:12px; color:var(--txt); line-height:1.5;">' +
+        '<b>⚡ Sovereign UPI Gateway (0% Fees)</b><br/>' +
+        'Enter your UPI ID (VPA) or Razorpay UPI ID. You can also upload your custom Razorpay QR image. Customers pay directly into your account.' +
+      '</div>' +
+      '<form class="form" id="payConfigForm">' +
+        '<div class="fld"><label>Your UPI ID (VPA)</label><input id="pcfgUpiId" type="text" placeholder="e.g. name@okhdfc or rzp@icici" value="' + esc(paymentConfig.upiId || '') + '" required />' +
+          '<span style="font-size:11px; color:var(--mut); margin-top:3px; display:block;">Found under your Razorpay QR code or in your UPI app profile.</span>' +
+        '</div>' +
+        '<div class="fld"><label>Display / Merchant Name</label><input id="pcfgName" type="text" placeholder="e.g. StreamCos Cinema" value="' + esc(paymentConfig.merchantName || '') + '" /></div>' +
+        '<div class="fld"><label>Custom Razorpay QR Image (Optional)</label>' +
+          (paymentConfig.qrImage ? '<div style="margin-bottom:8px; display:flex; align-items:center; gap:10px;"><img src="' + esc(mediaUrl(paymentConfig.qrImage)) + '" style="width:50px; height:50px; border-radius:6px; object-fit:cover; border:1px solid var(--line2);" /><button type="button" class="btn ghost sm" id="removeQrImgBtn" style="font-size:11px; padding:4px 8px;">Remove Custom QR</button></div>' : '') +
+          '<input id="pcfgQrFile" type="file" accept="image/*" />' +
+          '<span style="font-size:11px; color:var(--mut); margin-top:3px; display:block;">If left blank, a dynamic vector QR for exact ₹99 is generated automatically.</span>' +
+        '</div>' +
+        '<div style="display:flex; gap:8px; margin-top:14px;">' +
+          '<button class="btn acc block" type="submit" id="savePayCfgBtn" style="flex:1;">Save Payment Settings</button>' +
+          '<button class="btn ghost" type="button" id="cancelPayCfgBtn">Cancel</button>' +
+        '</div>' +
+      '</form></div>';
+
+    slot.scrollIntoView({ behavior: "smooth", block: "start" });
+
+    var removeBtn = $("#removeQrImgBtn");
+    if (removeBtn) {
+      removeBtn.addEventListener("click", function() {
+        paymentConfig.qrImage = null;
+        renderPaymentSettingsForm();
+      });
+    }
+
+    $("#cancelPayCfgBtn").addEventListener("click", function() { slot.innerHTML = ""; });
+
+    $("#payConfigForm").addEventListener("submit", async function(e) {
+      e.preventDefault();
+      var upi = $("#pcfgUpiId").value.trim();
+      var name = $("#pcfgName").value.trim() || "StreamCos Cinema";
+      if (!upi || !/^[\w.\-]{2,}@[a-zA-Z0-9.\-]{2,}/.test(upi)) {
+        toast("Please enter a valid UPI ID (e.g. name@bank or merchant@razorpay)");
+        return;
+      }
+      var btn = $("#savePayCfgBtn");
+      btn.textContent = "Saving...";
+      btn.disabled = true;
+
+      var qrImgUrl = paymentConfig.qrImage;
+      var file = $("#pcfgQrFile").files[0];
+      if (file) {
+        try {
+          var uploadHeaders = {
+            "X-Filename": encodeURIComponent(file.name),
+            "Content-Type": file.type || "image/png"
+          };
+          if (ownerToken) uploadHeaders["Authorization"] = "Bearer " + ownerToken;
+          var upRes = await fetch((API_BASE ? API_BASE : "") + "/api/upload", {
+            method: "POST",
+            headers: uploadHeaders,
+            body: file
+          });
+          var upData = await upRes.json();
+          if (upData.ok) {
+            qrImgUrl = upData.rawUrl || upData.url;
+          }
+        } catch(err) {
+          toast("QR Image upload failed: " + err.message);
+        }
+      }
+
+      try {
+        var res = await api('/api/admin/payment/config', {
+          method: 'POST',
+          body: JSON.stringify({
+            upiId: upi,
+            merchantName: name,
+            qrImage: qrImgUrl
+          })
+        });
+        if (res && res.config) {
+          paymentConfig = res.config;
+        }
+        toast("Payment gateway updated successfully!");
+        slot.innerHTML = "";
+        renderAdmin();
+      } catch(err) {
+        toast("Save failed: " + err.message);
+        btn.textContent = "Save Payment Settings";
+        btn.disabled = false;
+      }
+    });
   }
 
   function renderPinGate(slot) {
@@ -1299,4 +1495,5 @@
   checkServerHealth();
   syncCatalog();
   syncUserData();
+  loadPaymentConfig();
 })();

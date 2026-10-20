@@ -54,7 +54,12 @@ let db = {
   progress: {},
   sales: [],
   ownerPinHash: null,
-  ownerPinSalt: null
+  ownerPinSalt: null,
+  paymentConfig: {
+    upiId: "streamcos@upi",
+    merchantName: "StreamCos Cinema",
+    qrImage: null
+  }
 };
 
 function loadDb() {
@@ -63,6 +68,14 @@ function loadDb() {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
       const loaded = JSON.parse(raw);
       db = Object.assign(db, loaded);
+
+      if (!db.paymentConfig) {
+        db.paymentConfig = {
+          upiId: "streamcos@upi",
+          merchantName: "StreamCos Cinema",
+          qrImage: null
+        };
+      }
 
       // Auto-migrate server secret
       if (!db.serverSecret) {
@@ -477,31 +490,61 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
+      // Payment Config GET (Public)
+      if (pathname === '/api/payment/config' && method === 'GET') {
+        const cfg = db.paymentConfig || { upiId: 'streamcos@upi', merchantName: 'StreamCos Cinema', qrImage: null };
+        return json(res, 200, { ok: true, config: cfg });
+      }
+
+      // Payment Config POST (Requires Owner Token)
+      if (pathname === '/api/admin/payment/config' && method === 'POST') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+        const body = await readBody(req);
+        db.paymentConfig = Object.assign(db.paymentConfig || {}, {
+          upiId: (body.upiId || '').trim(),
+          merchantName: (body.merchantName || 'StreamCos Cinema').trim(),
+          qrImage: body.qrImage || null
+        });
+        saveDb();
+        return json(res, 200, { ok: true, config: db.paymentConfig });
+      }
+
       // Purchase POST (Requires Authenticated User Token)
       if (pathname === '/api/purchase' && method === 'POST') {
         const user = requireUser(req, searchParams);
         if (!user) {
           return json(res, 401, { error: 'Sign in required to make purchases' });
         }
-        const { videoId, price } = await readBody(req);
+        const { videoId, price, utr, paymentMethod } = await readBody(req);
         const cleanEmail = user.email;
         if (!videoId) return json(res, 400, { error: 'videoId required' });
 
+        const record = {
+          videoId,
+          price: Number(price || 0),
+          ts: Date.now(),
+          email: cleanEmail,
+          utr: utr ? String(utr).trim() : null,
+          method: paymentMethod || 'UPI'
+        };
+
         if (videoId === 'pass') {
           db.passHolders[cleanEmail] = true;
-          db.sales.push({ videoId: 'pass', price: price || 99, ts: Date.now(), email: cleanEmail });
+          db.sales.push(record);
         } else {
           if (!db.owns[cleanEmail]) db.owns[cleanEmail] = [];
           if (!db.owns[cleanEmail].includes(videoId)) {
             db.owns[cleanEmail].push(videoId);
           }
-          db.sales.push({ videoId, price: price || 0, ts: Date.now(), email: cleanEmail });
+          db.sales.push(record);
         }
         saveDb();
         return json(res, 200, {
           ok: true,
           owns: db.owns[cleanEmail] || [],
-          hasPass: !!db.passHolders[cleanEmail]
+          hasPass: !!db.passHolders[cleanEmail],
+          record
         });
       }
 
