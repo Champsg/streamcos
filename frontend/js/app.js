@@ -1144,7 +1144,9 @@
         try {
           var uploadHeaders = {
             "X-Filename": encodeURIComponent(file.name),
-            "Content-Type": file.type || "image/png"
+            "Content-Type": file.type || "image/png",
+            "ngrok-skip-browser-warning": "true",
+            "Bypass-Tunnel-Reminder": "true"
           };
           if (ownerToken) uploadHeaders["Authorization"] = "Bearer " + ownerToken;
           var upRes = await fetch((API_BASE ? API_BASE : "") + "/api/upload", {
@@ -1522,7 +1524,9 @@
       try {
         var uploadHeaders = {
           "X-Filename": encodeURIComponent(file.name),
-          "Content-Type": file.type || "image/jpeg"
+          "Content-Type": file.type || "image/jpeg",
+          "ngrok-skip-browser-warning": "true",
+          "Bypass-Tunnel-Reminder": "true"
         };
         if (ownerToken) uploadHeaders["Authorization"] = "Bearer " + ownerToken;
         var res = await fetch((API_BASE ? API_BASE : "") + "/api/upload", {
@@ -1690,7 +1694,12 @@
       statusEl.style.color = "var(--gold)";
       statusEl.textContent = "Connecting to your PC backend...";
       try {
-        var res = await fetch(val + '/api/health');
+        var res = await fetch(val + '/api/health', {
+          headers: {
+            'ngrok-skip-browser-warning': 'true',
+            'Bypass-Tunnel-Reminder': 'true'
+          }
+        });
         var data = await res.json();
         if (data.status === 'ok') {
           API_BASE = val;
