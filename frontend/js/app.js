@@ -2,9 +2,18 @@
   "use strict";
 
   // shortcut: local storage caching layer as offline fallback when backend server is restarting or unreachable.
-  var API_BASE = (window.location.origin && window.location.origin.startsWith('http') && !window.location.origin.includes(':5500') && !window.location.origin.includes(':3000'))
-    ? ''
-    : 'http://localhost:5000';
+  var DEFAULT_TUNNEL_URL = 'https://reference-diameter-heroes-supports.trycloudflare.com';
+  var customApi = localStorage.getItem('sc_api_base');
+  var API_BASE = customApi
+    ? customApi.replace(/\/+$/, '')
+    : ((window.location.origin && window.location.origin.includes('vercel.app'))
+        ? DEFAULT_TUNNEL_URL
+        : ((window.location.origin && window.location.origin.startsWith('http') && !window.location.origin.includes(':5500') && !window.location.origin.includes(':3000'))
+            ? ''
+            : 'http://localhost:5000'));
+
+  var authToken = localStorage.getItem('sc_token') || null;
+  var ownerToken = sessionStorage.getItem('sc_owner_token') || null;
 
   var store = {
     get: function(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch(e) { return d; } },
@@ -66,10 +75,16 @@
   async function api(path, options) {
     options = options || {};
     var url = (path.startsWith('http') ? path : (API_BASE + path));
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+    if (ownerToken) {
+      headers['Authorization'] = 'Bearer ' + ownerToken;
+    } else if (authToken) {
+      headers['Authorization'] = 'Bearer ' + authToken;
+    }
     try {
       var res = await fetch(url, {
-        headers: { 'Content-Type': 'application/json' },
-        ...options
+        ...options,
+        headers: headers
       });
       var data = await res.json().catch(function() { return {}; });
       if (!res.ok) throw new Error(data.error || 'Server error ' + res.status);
@@ -93,9 +108,19 @@
   }
 
   async function syncUserData() {
-    if (!session || !session.email) return;
+    if (!authToken) {
+      owns = [];
+      passHolders = false;
+      progress = {};
+      session = null;
+      store.del(K.sess);
+      renderHeader();
+      renderHome();
+      renderLibrary();
+      return;
+    }
     try {
-      var res = await api('/api/user/data?email=' + encodeURIComponent(session.email));
+      var res = await api('/api/user/data');
       if (res) {
         owns = res.owns || [];
         passHolders = !!res.hasPass;
@@ -107,7 +132,17 @@
         renderLibrary();
         renderAccount();
       }
-    } catch (e) {}
+    } catch (e) {
+      if (e.message && e.message.includes('401')) {
+        authToken = null;
+        localStorage.removeItem('sc_token');
+        session = null;
+        store.del(K.sess);
+        renderHeader();
+        renderHome();
+        renderLibrary();
+      }
+    }
   }
 
   var ICON = {
@@ -306,12 +341,20 @@
             method: 'POST',
             body: JSON.stringify({ name: name, email: email, pass: pass })
           });
+          if (reg && reg.token) {
+            authToken = reg.token;
+            localStorage.setItem('sc_token', authToken);
+          }
           userResult = reg.user;
         } else {
           var log = await api('/api/auth/login', {
             method: 'POST',
             body: JSON.stringify({ email: email, pass: pass })
           });
+          if (log && log.token) {
+            authToken = log.token;
+            localStorage.setItem('sc_token', authToken);
+          }
           userResult = log.user;
         }
 
@@ -430,18 +473,42 @@
   var playerCtx = { id: null, preview: false };
   var hlsInstance = null;
 
-  function openPlayer(id, preview) {
+  async function openPlayer(id, preview) {
     var v = byId(id); if (!v) return;
-    if (!preview && !isOwned(id)) { openDetail(id); return; }
     closeSheets();
     if (hlsInstance) { hlsInstance.destroy(); hlsInstance = null; }
     playerCtx = { id: id, preview: !!preview };
     $("#playerTitle").textContent = v.title;
-    $("#playerMode").textContent = preview ? "Preview · 45 sec" : "Now playing";
+    $("#playerMode").textContent = preview ? "Preview · 45 sec" : "Authorizing...";
     $("#previewEnd").classList.remove("on");
-    var el = $("#videoEl");
+
     var videoSrc = v.video || '';
 
+    // If it's a full playback (not preview), request signed token from backend
+    if (!preview) {
+      try {
+        var tokenRes = await api('/api/player/token', {
+          method: 'POST',
+          body: JSON.stringify({ videoId: id })
+        });
+        if (tokenRes && tokenRes.playToken) {
+          if (videoSrc.startsWith('/uploads/') || (API_BASE && videoSrc.startsWith(API_BASE))) {
+            videoSrc = (videoSrc.startsWith('http') ? videoSrc : (API_BASE + videoSrc));
+            videoSrc += (videoSrc.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tokenRes.playToken);
+          }
+        }
+      } catch (err) {
+        toast(err.message || 'Pass required to stream');
+        buyFlow(id);
+        return;
+      }
+    } else {
+      if (videoSrc.startsWith('/uploads/')) {
+        videoSrc = (API_BASE ? API_BASE : '') + videoSrc;
+      }
+    }
+
+    var el = $("#videoEl");
     // Hovod HLS adaptive bitrate streaming
     if (videoSrc.includes('.m3u8')) {
       if (window.Hls && Hls.isSupported()) {
@@ -579,6 +646,9 @@
 
     var pb = $("#accPassBtn"); if (pb) pb.addEventListener("click", function() { startCheckout("pass"); });
     $("#signOutBtn").addEventListener("click", function() {
+      authToken = null; ownerToken = null;
+      localStorage.removeItem('sc_token');
+      sessionStorage.removeItem('sc_owner_token');
       session = null; owns = []; passHolders = false; progress = {};
       store.del(K.sess); store.del(K.owns); store.del(K.pass); store.del(K.prog);
       ownerUnlocked = false; $("#tabAdmin").classList.add("hidden");
@@ -723,7 +793,11 @@
       if (state.pinStep === "confirm") {
         if (state.pinBuffer !== state.pinNew) { state.pinStep = "create"; state.pinBuffer = ""; renderAdmin(); toast("PINs didn't match — start again."); return; }
         try {
-          await api('/api/admin/verify-pin', { method: 'POST', body: JSON.stringify({ newPin: state.pinNew }) });
+          var setupRes = await api('/api/admin/verify-pin', { method: 'POST', body: JSON.stringify({ newPin: state.pinNew }) });
+          if (setupRes.ownerToken) {
+            ownerToken = setupRes.ownerToken;
+            sessionStorage.setItem('sc_owner_token', ownerToken);
+          }
           ownerUnlocked = true; renderAdmin(); toast("Studio unlocked. Welcome, owner.");
         } catch (errApi) {
           fail(errApi.message);
@@ -736,9 +810,13 @@
         if (res.needsSetup) {
           state.pinStep = "create"; state.pinBuffer = ""; renderAdmin(); return;
         }
+        if (res.ownerToken) {
+          ownerToken = res.ownerToken;
+          sessionStorage.setItem('sc_owner_token', ownerToken);
+        }
         ownerUnlocked = true; renderAdmin(); toast("Studio unlocked. Welcome back, owner.");
       } catch (verifyErr) {
-        fail("Wrong PIN. Enter 1234 or reset.");
+        fail("Wrong PIN. Enter your 4-digit PIN.");
       }
     });
   }
@@ -809,6 +887,7 @@
       xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name));
       xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
       if (wantHls) xhr.setRequestHeader("X-Auto-HLS", "true");
+      if (ownerToken) xhr.setRequestHeader("Authorization", "Bearer " + ownerToken);
 
       xhr.upload.onprogress = function(e) {
         if (e.lengthComputable) {
@@ -868,12 +947,14 @@
       if (!file) return;
       toast("Uploading poster from PC...");
       try {
+        var uploadHeaders = {
+          "X-Filename": encodeURIComponent(file.name),
+          "Content-Type": file.type || "image/jpeg"
+        };
+        if (ownerToken) uploadHeaders["Authorization"] = "Bearer " + ownerToken;
         var res = await fetch((API_BASE ? API_BASE : "") + "/api/upload", {
           method: "POST",
-          headers: {
-            "X-Filename": encodeURIComponent(file.name),
-            "Content-Type": file.type || "image/jpeg"
-          },
+          headers: uploadHeaders,
           body: file
         });
         var data = await res.json();
@@ -978,9 +1059,92 @@
     if (e.key === "Escape") { closeSheets(); if ($("#player").classList.contains("on")) closePlayer(); }
   });
 
+  /* ============ server connection modal ============ */
+  function updateServerBadge(online, text) {
+    var btn = $("#serverBtn");
+    var dot = $("#serverDot");
+    var lbl = $("#serverLbl");
+    if (!btn || !dot || !lbl) return;
+    if (online) {
+      btn.classList.remove("offline");
+      lbl.textContent = text || "PC Online";
+    } else {
+      btn.classList.add("offline");
+      lbl.textContent = text || "Offline";
+    }
+  }
+
+  async function checkServerHealth() {
+    try {
+      var h = await api('/api/health');
+      if (h && h.status === 'ok') {
+        updateServerBadge(true, "PC Online");
+        return true;
+      }
+    } catch (e) {
+      updateServerBadge(false, "Offline");
+      return false;
+    }
+  }
+
+  function openServerModal() {
+    var sh = $("#serverSheet"), sc = $("#scrim");
+    sh.innerHTML =
+      '<div class="s-head"><h3>PC Backend 24x7 Connection</h3><button class="sheet-x" id="serverClose" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke-width="2.2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>' +
+      '<div style="padding:16px 20px calc(24px + env(safe-area-inset-bottom));">' +
+        '<p style="font-size:13px; color:var(--mut); line-height:1.55; margin-bottom:14px;">Your backend and Hovod HLS engine run 24/7 on your PC. Any device or friend worldwide connects securely through this Cloudflare Tunnel URL:</p>' +
+        '<div class="fld"><label>Active Backend Tunnel URL</label><input type="text" id="serverUrlInput" value="' + esc(API_BASE) + '" placeholder="https://....trycloudflare.com" /></div>' +
+        '<div style="display:flex; gap:8px; margin-top:14px;">' +
+          '<button class="btn acc block" id="btnSaveServer" style="flex:1;">Test & Connect</button>' +
+          '<button class="btn ghost" id="btnResetServer">Reset Default</button>' +
+        '</div>' +
+        '<div id="serverTestStatus" style="font-size:12px; margin-top:12px; font-weight:700;"></div>' +
+      '</div>';
+    sc.classList.add("on");
+    sh.classList.add("on");
+
+    $("#serverClose").addEventListener("click", function() { sh.classList.remove("on"); sc.classList.remove("on"); });
+    $("#btnResetServer").addEventListener("click", function() {
+      localStorage.removeItem('sc_api_base');
+      API_BASE = DEFAULT_TUNNEL_URL;
+      $("#serverUrlInput").value = API_BASE;
+      toast("Reset to default public tunnel URL");
+    });
+    $("#btnSaveServer").addEventListener("click", async function() {
+      var val = $("#serverUrlInput").value.trim().replace(/\/+$/, '');
+      var statusEl = $("#serverTestStatus");
+      statusEl.style.color = "var(--gold)";
+      statusEl.textContent = "Connecting to your PC backend...";
+      try {
+        var res = await fetch(val + '/api/health');
+        var data = await res.json();
+        if (data.status === 'ok') {
+          API_BASE = val;
+          localStorage.setItem('sc_api_base', val);
+          statusEl.style.color = "var(--green)";
+          statusEl.textContent = "✔ Connected! Backend is live & secure.";
+          updateServerBadge(true, "PC Online");
+          toast("Backend connected!");
+          setTimeout(function() { sh.classList.remove("on"); sc.classList.remove("on"); }, 1000);
+          syncCatalog();
+          syncUserData();
+        } else {
+          throw new Error("Invalid response");
+        }
+      } catch (err) {
+        statusEl.style.color = "var(--acc)";
+        statusEl.textContent = "❌ Connection failed: " + err.message;
+      }
+    });
+  }
+
+  var sBtn = $("#serverBtn");
+  if (sBtn) sBtn.addEventListener("click", openServerModal);
+
   /* ============ initialization ============ */
   renderHeader();
   renderHome();
+  checkServerHealth();
   syncCatalog();
   syncUserData();
 })();

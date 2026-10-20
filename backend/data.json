@@ -1,4 +1,5 @@
 {
+  "serverSecret": "4b97ec91cb711917e84d8432fd511474f236f43d939b23e4eb11c60ee57215ea",
   "catalog": [
     {
       "id": "vmvghih2k",
@@ -107,74 +108,100 @@
     {
       "name": "Test User",
       "email": "tester_1792482298999@test.com",
-      "pass": "secret123",
-      "joined": 1792482299002
+      "joined": 1792482299002,
+      "passHash": "fcecfc8498cbd86d402fd9c9778c76ea65c74c88368255f371545c64c4c62ac9",
+      "passSalt": "d57a46a563b3254b7e2337f42f5aae73"
     },
     {
       "name": "Test User",
       "email": "tester_1792482323107@test.com",
-      "pass": "secret123",
-      "joined": 1792482323111
+      "joined": 1792482323111,
+      "passHash": "9d94dc726ba0581c3d96d40550ed1de64b9543ce1fbc317598e3c4deb6e6caea",
+      "passSalt": "e5cdae96b34e8f927a59c831a33081f1"
     },
     {
       "name": "Test User",
       "email": "tester_1792482343030@test.com",
-      "pass": "secret123",
-      "joined": 1792482343033
+      "joined": 1792482343033,
+      "passHash": "80ef006d4b013c4f05147281d7343028b3c6952d6fc98098b5ca28f857fa39d9",
+      "passSalt": "950081abeba7b35b55d6dcea08080412"
     },
     {
       "name": "Test User",
       "email": "tester_1792482548382@test.com",
-      "pass": "secret123",
-      "joined": 1792482548385
+      "joined": 1792482548385,
+      "passHash": "fb2e6fb53dd229e24303e2ef549aac0d951fd9c0c4644686bb996a09fc1340e3",
+      "passSalt": "e5e83c75ced988fe0a794f1e530d2364"
     },
     {
       "name": "Test User",
       "email": "tester_1792482567199@test.com",
-      "pass": "secret123",
-      "joined": 1792482567204
+      "joined": 1792482567204,
+      "passHash": "5fa109929b05fb9fdd3abec7a2ea4e68664c4c0e45e8245360096192fdf50352",
+      "passSalt": "819770d30e2de91f94e147f9fb05f898"
     },
     {
       "name": "Test User",
       "email": "tester_1792482585936@test.com",
-      "pass": "secret123",
-      "joined": 1792482585940
+      "joined": 1792482585940,
+      "passHash": "76390289740fe35c3372848cc8f8b9cab2625f2db1bcb93106004a0a51f40fef",
+      "passSalt": "f07321117f9a265f7a0482eab9b1c692"
     },
     {
       "name": "Test User",
       "email": "tester_1792486853102@test.com",
-      "pass": "secret123",
-      "joined": 1792486853106
+      "joined": 1792486853106,
+      "passHash": "3d528da6a4ee82c495cdf453e4447418d0798e354cf15f758d0cea0bb66e3bc2",
+      "passSalt": "11b214d28002f58f5f5ec575763d267c"
     },
     {
       "name": "Test User",
       "email": "tester_1792486870684@test.com",
-      "pass": "secret123",
-      "joined": 1792486870687
+      "joined": 1792486870687,
+      "passHash": "78194ee11bbb1327b0da6b56c79176fb8e1614c1b267f44eb34b8aaa25dc6149",
+      "passSalt": "b4309bd5acba4d0c10873c1cd2fdead8"
     },
     {
       "name": "Test User",
       "email": "tester_1792486911832@test.com",
-      "pass": "secret123",
-      "joined": 1792486911835
+      "joined": 1792486911835,
+      "passHash": "b326d85dc3d8f3b5e18baa4eea32f947d46dbd2a8b9c61ca80c5780e8e1cb1bb",
+      "passSalt": "f9821b8916854a0647d430130b99b05e"
     },
     {
       "name": "Test User",
       "email": "tester_1792486929156@test.com",
-      "pass": "secret123",
-      "joined": 1792486929161
+      "joined": 1792486929161,
+      "passHash": "69c24005ad9dd99a7ead52eb06ccd80f3426fbf01fd9faecdcd1acc205bd4979",
+      "passSalt": "6f4fda3277d9fee7a33f8b1099b209bc"
     },
     {
       "name": "Test User",
       "email": "tester_1792486955141@test.com",
-      "pass": "secret123",
-      "joined": 1792486955145
+      "joined": 1792486955145,
+      "passHash": "2f13e4350a77b3a4a15428229054b826f54931c0399e2e24f2bda5363a2f93bc",
+      "passSalt": "5d153a157a19e4754770c4270ad05892"
     },
     {
       "name": "Test User",
       "email": "tester_1792488535635@test.com",
-      "pass": "secret123",
-      "joined": 1792488535639
+      "joined": 1792488535639,
+      "passHash": "5878105fa1687e95ff6ffd74a67ac18c98c6d00ba1beb7efbdbed792d3d69f7b",
+      "passSalt": "7f6a27698571fa64fc4797a186634dc1"
+    },
+    {
+      "name": "Test User",
+      "email": "tester_1792489674198@test.com",
+      "passHash": "6017d86cf20880c965a640480cd0a65d102606bf21372c2447f159cf6a4ffcfa",
+      "passSalt": "e0a72d5c75b02b0dc1a9674de148e441",
+      "joined": 1792489674236
+    },
+    {
+      "name": "Test User",
+      "email": "tester_1792490182458@test.com",
+      "passHash": "f9769352e29a5f1627aba8ee809905d233fd2f591681472edee642d906f04f66",
+      "passSalt": "017db675c045347628fec0258147cc88",
+      "joined": 1792490182499
     }
   ],
   "owns": {},
@@ -190,7 +217,9 @@
     "tester_1792486911832@test.com": true,
     "tester_1792486929156@test.com": true,
     "tester_1792486955141@test.com": true,
-    "tester_1792488535635@test.com": true
+    "tester_1792488535635@test.com": true,
+    "tester_1792489674198@test.com": true,
+    "tester_1792490182458@test.com": true
   },
   "progress": {
     "tester_1792482298999@test.com": {
@@ -260,6 +289,18 @@
       }
     },
     "tester_1792488535635@test.com": {
+      "sintel": {
+        "t": 45,
+        "d": 900
+      }
+    },
+    "tester_1792489674198@test.com": {
+      "sintel": {
+        "t": 45,
+        "d": 900
+      }
+    },
+    "tester_1792490182458@test.com": {
       "sintel": {
         "t": 45,
         "d": 900
@@ -338,7 +379,20 @@
       "price": 99,
       "ts": 1792488535644,
       "email": "tester_1792488535635@test.com"
+    },
+    {
+      "videoId": "pass",
+      "price": 99,
+      "ts": 1792489674278,
+      "email": "tester_1792489674198@test.com"
+    },
+    {
+      "videoId": "pass",
+      "price": 99,
+      "ts": 1792490182538,
+      "email": "tester_1792490182458@test.com"
     }
   ],
-  "ownerPin": "1234"
+  "ownerPinHash": "4b948d83b3ab6335102081a65dcad4b85ffc236fcf0e2c127144ffeacb8535e4",
+  "ownerPinSalt": "93ec2bbad38c5d6e7d1fe0d94c78e9a4"
 }

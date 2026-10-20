@@ -18,7 +18,13 @@
           <span class="mark"><svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg></span>
           <span>Stream<em>Cos</em></span>
         </div>
-        <button class="avatar-btn" id="hdrAvatar" aria-label="Account"></button>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <button class="server-btn" id="serverBtn" title="PC Backend Connection">
+            <span class="sdot" id="serverDot"></span>
+            <span class="slbl" id="serverLbl">PC Online</span>
+          </button>
+          <button class="avatar-btn" id="hdrAvatar" aria-label="Account"></button>
+        </div>
       </header>
 
       <main>
@@ -119,6 +125,7 @@
     <div class="sheet" id="detailSheet" role="dialog" aria-modal="true"></div>
     <div class="sheet" id="authSheet" role="dialog" aria-modal="true"></div>
     <div class="sheet" id="paySheet" role="dialog" aria-modal="true"></div>
+    <div class="sheet" id="serverSheet" role="dialog" aria-modal="true"></div>
 
     <!-- player -->
     <div class="player" id="player">

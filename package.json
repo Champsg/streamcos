@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node backend/server.js",
     "dev": "node backend/server.js",
+    "tunnel": "cloudflared tunnel --url http://localhost:5000",
     "test": "node backend/test.js"
   },
   "keywords": ["video", "streaming", "node"],

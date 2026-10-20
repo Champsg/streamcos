@@ -133,6 +133,35 @@ header.top {
   overflow: hidden;
 }
 
+.server-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, .05);
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--txt);
+  transition: all .2s ease;
+}
+.server-btn:hover {
+  background: rgba(255, 255, 255, .1);
+  border-color: var(--dim);
+}
+.server-btn .sdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.server-btn.offline .sdot {
+  background: var(--acc);
+  box-shadow: 0 0 6px var(--acc);
+}
+
 .avatar-btn svg {
   width: 18px;
   height: 18px;

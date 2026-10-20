@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { transcodeToHLS, extractThumbnail } = require('./transcoder');
+const { getSecret, hashPassword, verifyPassword, createToken, verifyToken, extractToken } = require('./auth');
 
 const PORT = process.env.PORT || 5000;
 const DATA_FILE = path.join(__dirname, 'data.json');
@@ -21,49 +22,80 @@ const SEED_CATALOG = [
   { id:"sintel", title:"Sintel", year:2010, mins:15, rating:"8.1", quality:"4K", category:"Fantasy",
     price:299, oldPrice:499, views:18400, featured:true, published:true,
     poster:"assets/poster-sintel.jpg", video:"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-    desc:"A lonely young wanderer crosses a frozen wasteland searching for Scales, the baby dragon she once rescued and lost. Colin Levy's wordless fantasy about love, obsession and letting go — the Blender Institute film that proved open-source cinema could break hearts." },
+    desc:"A lonely young wanderer crosses a frozen wasteland searching for Scales, the baby dragon she once rescued and lost. Colin Levy's wordless fantasy about love, obsession and letting go." },
   { id:"tears-of-steel", title:"Tears of Steel", year:2012, mins:12, rating:"7.4", quality:"HD", category:"Sci-Fi",
     price:249, oldPrice:399, views:15200, featured:false, published:true,
     poster:"assets/poster-tears-of-steel.jpg", video:"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4",
-    desc:"Forty years after giant machines tore Amsterdam apart, a group of scientists and robots restages the day it all went wrong — hoping a perfect re-enactment can rewrite the past and save humanity's future." },
+    desc:"Forty years after giant machines tore Amsterdam apart, a group of scientists and robots restages the day it all went wrong." },
   { id:"spring", title:"Spring", year:2019, mins:8, rating:"7.9", quality:"4K", category:"Fantasy",
     price:199, oldPrice:299, views:12800, featured:false, published:true,
     poster:"assets/poster-spring.jpg", video:"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4",
-    desc:"High in the mountains, a shepherd girl and her loyal dog must face the ancient spirits of the forest to coax the season back to life. A poetic, dialogue-free fantasy painted in light and mist. (Preview streams a companion Blender short.)" },
+    desc:"High in the mountains, a shepherd girl and her loyal dog must face the ancient spirits of the forest to coax the season back to life." },
   { id:"agent-327", title:"Agent 327: Operation Barbershop", year:2017, mins:4, rating:"7.8", quality:"HD", category:"Comedy",
     price:149, oldPrice:249, views:9700, featured:false, published:true,
     poster:"assets/poster-agent-327.jpg", video:"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
-    desc:"Hendrik IJzerbroot — Agent 327, Holland's most accident-prone secret agent — pops into a barbershop for a quick trim and walks straight into a trap. Three and a half minutes of gadgets, disguises and perfectly timed slapstick." },
+    desc:"Hendrik IJzerbroot — Agent 327, Holland's most accident-prone secret agent — pops into a barbershop for a quick trim and walks straight into a trap." },
   { id:"big-buck-bunny", title:"Big Buck Bunny", year:2008, mins:10, rating:"7.6", quality:"HD", category:"Family",
     price:0, oldPrice:0, views:22100, featured:false, published:true,
     poster:"assets/poster-big-buck-bunny.jpg", video:"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4",
-    desc:"The gentle giant of the forest loves butterflies, berries and quiet mornings — until three bullying rodents push him one prank too far. The Blender Institute's beloved slapstick family comedy. Free for everyone, forever." },
+    desc:"The gentle giant of the forest loves butterflies, berries and quiet mornings — until three bullying rodents push him one prank too far. Free for everyone, forever." },
   { id:"elephants-dream", title:"Elephants Dream", year:2006, mins:11, rating:"6.9", quality:"HD", category:"Sci-Fi",
     price:179, oldPrice:279, views:6400, featured:false, published:true,
     poster:"assets/poster-elephants-dream.jpg", video:"https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4",
-    desc:"Inside an infinite, ever-shifting Machine, the elder Proog tries to open young Emo's eyes to its wonders — but Emo begins to doubt everything he is shown. The first film ever made entirely with open-source tools." }
+    desc:"Inside an infinite, ever-shifting Machine, the elder Proog tries to open young Emo's eyes to its wonders — but Emo begins to doubt everything he is shown." }
 ];
 
 let db = {
+  serverSecret: null,
   catalog: SEED_CATALOG.slice(),
   users: [],
   owns: {},
   passHolders: {},
   progress: {},
   sales: [],
-  ownerPin: null
+  ownerPinHash: null,
+  ownerPinSalt: null
 };
 
 function loadDb() {
   try {
     if (fs.existsSync(DATA_FILE)) {
       const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-      db = Object.assign(db, JSON.parse(raw));
+      const loaded = JSON.parse(raw);
+      db = Object.assign(db, loaded);
+
+      // Auto-migrate server secret
+      if (!db.serverSecret) {
+        db.serverSecret = getSecret();
+      }
+
+      // Auto-migrate legacy ownerPin to salted hash
+      if (db.ownerPin && !db.ownerPinHash) {
+        const p = hashPassword(db.ownerPin);
+        db.ownerPinHash = p.hash;
+        db.ownerPinSalt = p.salt;
+        delete db.ownerPin;
+      }
+
+      // Auto-migrate legacy users to salted hashes
+      if (Array.isArray(db.users)) {
+        db.users.forEach(u => {
+          if (u.pass && !u.passHash) {
+            const p = hashPassword(u.pass);
+            u.passHash = p.hash;
+            u.passSalt = p.salt;
+            delete u.pass;
+          }
+        });
+      }
+      saveDb();
     } else {
+      db.serverSecret = getSecret();
       saveDb();
     }
   } catch (err) {
     console.error('Failed to load data.json, using defaults:', err.message);
+    if (!db.serverSecret) db.serverSecret = getSecret();
   }
 }
 
@@ -82,7 +114,7 @@ function json(res, statusCode, data) {
     'Content-Type': 'application/json; charset=utf-8',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS, X-Token'
   });
   res.end(JSON.stringify(data));
 }
@@ -100,6 +132,20 @@ function readBody(req) {
       catch (e) { reject(new Error('Invalid JSON')); }
     });
   });
+}
+
+function requireUser(req, searchParams) {
+  const token = extractToken(req, searchParams);
+  const payload = verifyToken(token, db.serverSecret);
+  if (!payload || !payload.email) return null;
+  return payload;
+}
+
+function requireOwner(req, searchParams) {
+  const token = extractToken(req, searchParams);
+  const payload = verifyToken(token, db.serverSecret);
+  if (!payload || payload.role !== 'owner') return null;
+  return payload;
 }
 
 const MIME_TYPES = {
@@ -139,9 +185,26 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-function serveUpload(req, res, pathname) {
+function serveUpload(req, res, pathname, searchParams) {
   const clean = pathname.slice('/uploads/'.length).replace(/^(\.\.[\/\\])+/, '');
   const filePath = path.join(UPLOADS_DIR, clean);
+
+  // Posters and misc non-video assets are public for catalog thumbnails
+  const isVideoMedia = clean.startsWith('videos/') || clean.startsWith('hls/');
+  if (isVideoMedia) {
+    const token = extractToken(req, searchParams);
+    const decoded = verifyToken(token, db.serverSecret);
+    const isAuthorized = decoded && (decoded.role === 'owner' || decoded.access === 'paid' || decoded.access === 'free');
+    
+    // Also allow if this specific video file belongs to a free catalog title
+    const isCatalogFree = db.catalog.some(c => Number(c.price || 0) === 0 && c.video && c.video.includes(clean));
+
+    if (!isAuthorized && !isCatalogFree) {
+      res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: 'Unauthorized stream: valid playback token required' }));
+      return;
+    }
+  }
 
   fs.stat(filePath, (err, stats) => {
     if (err || !stats.isFile()) {
@@ -152,7 +215,7 @@ function serveUpload(req, res, pathname) {
     const ext = path.extname(filePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
 
-    // Support HTTP Range requests for fast seeking in MP4 videos
+    // Support HTTP Range requests for MP4 seeking
     const range = req.headers.range;
     if (range && ext === '.mp4') {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -187,20 +250,20 @@ const server = http.createServer(async (req, res) => {
   const searchParams = reqUrl.searchParams;
   const method = req.method.toUpperCase();
 
-  // Handle CORS Preflight
+  // CORS Preflight
   if (method === 'OPTIONS') {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS, X-Token'
     });
     res.end();
     return;
   }
 
-  // --- Upload Routes (/uploads/*) ---
+  // --- Protected Media Uploads (/uploads/*) ---
   if (pathname.startsWith('/uploads/')) {
-    return serveUpload(req, res, pathname);
+    return serveUpload(req, res, pathname, searchParams);
   }
 
   // --- API Routes ---
@@ -208,18 +271,16 @@ const server = http.createServer(async (req, res) => {
     try {
       // Health
       if (pathname === '/api/health' && method === 'GET') {
-        return json(res, 200, { status: 'ok', time: Date.now() });
+        return json(res, 200, { status: 'ok', secured: true, time: Date.now() });
       }
 
-      // Network Info (for streaming to other devices / phones on local Wi-Fi)
+      // Network Info
       if (pathname === '/api/network-info' && method === 'GET') {
         const nets = os.networkInterfaces();
         const ips = [];
         for (const name of Object.keys(nets)) {
           for (const net of nets[name]) {
-            if (net.family === 'IPv4' && !net.internal) {
-              ips.push(net.address);
-            }
+            if (net.family === 'IPv4' && !net.internal) ips.push(net.address);
           }
         }
         return json(res, 200, {
@@ -229,8 +290,13 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // Direct Video / Poster Upload from PC
+      // Direct Video / Poster Upload (Requires Owner Token)
       if (pathname === '/api/upload' && method === 'POST') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) {
+          return json(res, 401, { error: 'Owner authentication required for video upload' });
+        }
+
         const rawName = decodeURIComponent(req.headers['x-filename'] || 'file_' + Date.now());
         const ext = path.extname(rawName).toLowerCase() || '.mp4';
         const isVideo = ['.mp4', '.mov', '.mkv', '.webm', '.avi'].includes(ext);
@@ -279,28 +345,16 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      // On-demand HLS Transcoding (Hovod-style)
-      if (pathname === '/api/transcode' && method === 'POST') {
-        const { videoUrl, videoId } = await readBody(req);
-        if (!videoUrl) return json(res, 400, { error: 'videoUrl required' });
-
-        let sourcePath = videoUrl;
-        if (videoUrl.startsWith('/uploads/')) {
-          sourcePath = path.join(UPLOADS_DIR, videoUrl.slice('/uploads/'.length));
-        }
-
-        const id = videoId || 'hls_' + Date.now().toString(36);
-        const result = await transcodeToHLS(sourcePath, path.join(UPLOADS_DIR, 'hls'), id);
-        return json(res, 200, { ok: true, ...result });
-      }
-
-      // Catalog GET
+      // Catalog GET (Public)
       if (pathname === '/api/catalog' && method === 'GET') {
         return json(res, 200, { catalog: db.catalog });
       }
 
-      // Catalog POST (Add film)
+      // Catalog POST (Requires Owner Token)
       if (pathname === '/api/catalog' && method === 'POST') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
         const body = await readBody(req);
         if (!body.title || !body.video) {
           return json(res, 400, { error: 'Title and video URL are required' });
@@ -327,8 +381,11 @@ const server = http.createServer(async (req, res) => {
         return json(res, 201, { ok: true, film: item });
       }
 
-      // Catalog PUT /api/catalog/:id
+      // Catalog PUT /api/catalog/:id (Requires Owner Token)
       if (pathname.startsWith('/api/catalog/') && method === 'PUT') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
         const id = pathname.slice('/api/catalog/'.length);
         const body = await readBody(req);
         const idx = db.catalog.findIndex(c => c.id === id);
@@ -338,8 +395,11 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { ok: true, film: db.catalog[idx] });
       }
 
-      // Catalog DELETE /api/catalog/:id
+      // Catalog DELETE /api/catalog/:id (Requires Owner Token)
       if (pathname.startsWith('/api/catalog/') && method === 'DELETE') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
         const id = pathname.slice('/api/catalog/'.length);
         db.catalog = db.catalog.filter(c => c.id !== id);
         saveDb();
@@ -356,10 +416,16 @@ const server = http.createServer(async (req, res) => {
         if (db.users.find(u => u.email === cleanEmail)) {
           return json(res, 400, { error: 'That email already has an account — sign in instead.' });
         }
-        const user = { name: name.trim(), email: cleanEmail, pass, joined: Date.now() };
+        const { hash, salt } = hashPassword(pass);
+        const user = { name: name.trim(), email: cleanEmail, passHash: hash, passSalt: salt, joined: Date.now() };
         db.users.push(user);
         saveDb();
-        return json(res, 201, { ok: true, user: { name: user.name, email: user.email, joined: user.joined } });
+        const token = createToken({ email: cleanEmail, name: user.name }, db.serverSecret);
+        return json(res, 201, {
+          ok: true,
+          token,
+          user: { name: user.name, email: user.email, joined: user.joined }
+        });
       }
 
       // Auth Login
@@ -367,16 +433,24 @@ const server = http.createServer(async (req, res) => {
         const { email, pass } = await readBody(req);
         const cleanEmail = (email || '').trim().toLowerCase();
         const user = db.users.find(u => u.email === cleanEmail);
-        if (!user || user.pass !== pass) {
+        if (!user || !verifyPassword(pass, user.passHash, user.passSalt)) {
           return json(res, 401, { error: 'Invalid email or password' });
         }
-        return json(res, 200, { ok: true, user: { name: user.name, email: user.email, joined: user.joined } });
+        const token = createToken({ email: cleanEmail, name: user.name }, db.serverSecret);
+        return json(res, 200, {
+          ok: true,
+          token,
+          user: { name: user.name, email: user.email, joined: user.joined }
+        });
       }
 
-      // User Data GET (owns, pass status, progress)
+      // User Data GET (Requires Valid User Token)
       if (pathname === '/api/user/data' && method === 'GET') {
-        const email = (searchParams.get('email') || '').trim().toLowerCase();
-        if (!email) return json(res, 400, { error: 'Email parameter required' });
+        const user = requireUser(req, searchParams);
+        if (!user) {
+          return json(res, 401, { error: 'Valid user token required' });
+        }
+        const email = user.email;
         return json(res, 200, {
           email,
           owns: db.owns[email] || [],
@@ -385,11 +459,15 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // Purchase POST
+      // Purchase POST (Requires Authenticated User Token)
       if (pathname === '/api/purchase' && method === 'POST') {
-        const { email, videoId, price } = await readBody(req);
-        const cleanEmail = (email || '').trim().toLowerCase();
-        if (!cleanEmail || !videoId) return json(res, 400, { error: 'Email and videoId required' });
+        const user = requireUser(req, searchParams);
+        if (!user) {
+          return json(res, 401, { error: 'Sign in required to make purchases' });
+        }
+        const { videoId, price } = await readBody(req);
+        const cleanEmail = user.email;
+        if (!videoId) return json(res, 400, { error: 'videoId required' });
 
         if (videoId === 'pass') {
           db.passHolders[cleanEmail] = true;
@@ -409,19 +487,60 @@ const server = http.createServer(async (req, res) => {
         });
       }
 
-      // Progress POST
+      // Progress POST (Requires Authenticated User Token)
       if (pathname === '/api/progress' && method === 'POST') {
-        const { email, videoId, t, d } = await readBody(req);
-        const cleanEmail = (email || '').trim().toLowerCase();
-        if (!cleanEmail || !videoId) return json(res, 400, { error: 'Missing fields' });
+        const user = requireUser(req, searchParams);
+        if (!user) return json(res, 401, { error: 'Sign in required' });
+        const { videoId, t, d } = await readBody(req);
+        const cleanEmail = user.email;
+        if (!videoId) return json(res, 400, { error: 'Missing fields' });
         if (!db.progress[cleanEmail]) db.progress[cleanEmail] = {};
         db.progress[cleanEmail][videoId] = { t: Number(t || 0), d: Number(d || 0) };
         saveDb();
         return json(res, 200, { ok: true });
       }
 
-      // Admin Stats GET
+      // Signed Playback Token Gatekeeper
+      if (pathname === '/api/player/token' && method === 'POST') {
+        const { videoId } = await readBody(req);
+        if (!videoId) return json(res, 400, { error: 'videoId required' });
+
+        const film = db.catalog.find(c => c.id === videoId);
+        const isFree = !film || Number(film.price || 0) === 0;
+
+        if (isFree) {
+          const playToken = createToken({ videoId, access: 'free' }, db.serverSecret, 4 * 3600);
+          return json(res, 200, { ok: true, playToken, videoUrl: film ? film.video : null });
+        }
+
+        // Owner override
+        const owner = requireOwner(req, searchParams);
+        if (owner) {
+          const playToken = createToken({ videoId, role: 'owner', access: 'paid' }, db.serverSecret, 4 * 3600);
+          return json(res, 200, { ok: true, playToken, videoUrl: film.video });
+        }
+
+        const user = requireUser(req, searchParams);
+        if (!user) {
+          return json(res, 401, { error: 'Sign in required to stream this premium film', requiresAuth: true });
+        }
+
+        const hasPass = !!db.passHolders[user.email];
+        const ownsFilm = Array.isArray(db.owns[user.email]) && db.owns[user.email].includes(videoId);
+
+        if (!hasPass && !ownsFilm) {
+          return json(res, 403, { error: 'Pass or film purchase required to unlock this title', requiresPass: true });
+        }
+
+        const playToken = createToken({ videoId, email: user.email, access: 'paid' }, db.serverSecret, 4 * 3600);
+        return json(res, 200, { ok: true, playToken, videoUrl: film.video });
+      }
+
+      // Admin Stats GET (Requires Owner Token)
       if (pathname === '/api/admin/stats' && method === 'GET') {
+        const owner = requireOwner(req, searchParams);
+        if (!owner) return json(res, 401, { error: 'Owner authentication required' });
+
         const revenue = db.sales.reduce((sum, s) => sum + (s.price || 0), 0);
         return json(res, 200, {
           totalFilms: db.catalog.length,
@@ -434,22 +553,21 @@ const server = http.createServer(async (req, res) => {
 
       // Admin Verify / Set PIN
       if (pathname === '/api/admin/verify-pin' && method === 'POST') {
-        const { pin, newPin, reset } = await readBody(req);
-        if (reset) {
-          db.ownerPin = null;
-          saveDb();
-          return json(res, 200, { ok: true, message: 'PIN reset' });
-        }
-        if (!db.ownerPin) {
+        const { pin, newPin } = await readBody(req);
+        if (!db.ownerPinHash) {
           if (newPin && newPin.length === 4) {
-            db.ownerPin = newPin;
+            const p = hashPassword(newPin);
+            db.ownerPinHash = p.hash;
+            db.ownerPinSalt = p.salt;
             saveDb();
-            return json(res, 200, { ok: true, setup: true });
+            const ownerToken = createToken({ role: 'owner' }, db.serverSecret, 12 * 3600);
+            return json(res, 200, { ok: true, setup: true, ownerToken });
           }
           return json(res, 200, { ok: false, needsSetup: true });
         }
-        if (pin === db.ownerPin) {
-          return json(res, 200, { ok: true });
+        if (verifyPassword(pin, db.ownerPinHash, db.ownerPinSalt)) {
+          const ownerToken = createToken({ role: 'owner' }, db.serverSecret, 12 * 3600);
+          return json(res, 200, { ok: true, ownerToken });
         }
         return json(res, 401, { ok: false, error: 'Wrong PIN' });
       }
