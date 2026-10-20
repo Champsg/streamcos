@@ -2,11 +2,11 @@
   "use strict";
 
   // shortcut: local storage caching layer as offline fallback when backend server is restarting or unreachable.
-  var DEFAULT_TUNNEL_URL = 'https://despite-cornwall-returned-affected.trycloudflare.com';
+  var DEFAULT_TUNNEL_URL = 'https://some-linked-acne-straight.trycloudflare.com';
   var customApi = localStorage.getItem('sc_api_base');
   var API_BASE = customApi
     ? customApi.replace(/\/+$/, '')
-    : ((window.location.origin && window.location.origin.includes('vercel.app'))
+    : ((window.location.origin && (window.location.origin.includes('netlify.app') || window.location.origin.includes('vercel.app')))
         ? DEFAULT_TUNNEL_URL
         : ((window.location.origin && window.location.origin.startsWith('http') && !window.location.origin.includes(':5500') && !window.location.origin.includes(':3000'))
             ? ''

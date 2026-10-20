@@ -18,7 +18,6 @@ try {
       }
     } catch (e) {}
     try { execSync('taskkill /F /IM cloudflared.exe', { stdio: 'ignore' }); } catch(e){}
-    try { execSync('taskkill /F /IM ngrok.exe', { stdio: 'ignore' }); } catch(e){}
   }
 } catch (e) {}
 
@@ -42,18 +41,6 @@ for (const name of Object.keys(nets)) {
   }
 }
 
-// 4. Load Tunnel Configuration
-let tunnelConfig = { provider: 'cloudflare' };
-const configPath = path.join(__dirname, 'tunnel-config.json');
-try {
-  if (fs.existsSync(configPath)) {
-    tunnelConfig = Object.assign(tunnelConfig, JSON.parse(fs.readFileSync(configPath, 'utf8')));
-  }
-} catch (e) {}
-
-const ngrokBin = path.join(__dirname, 'bin', 'ngrok.exe');
-const useNgrok = tunnelConfig.provider === 'ngrok' && fs.existsSync(ngrokBin) && tunnelConfig.authtoken;
-
 let publicUrl = null;
 let tunnelProc = null;
 
@@ -75,56 +62,26 @@ function printBanner() {
   console.log('• Press Ctrl+C at any time to stop.\n');
 }
 
-if (useNgrok) {
-  tunnelProc = spawn(ngrokBin, [
-    'http', '5000',
-    '--log', 'stdout',
-    '--log-format', 'json'
-  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+// Cloudflare Tunnel (Clean, no warning screens, 100% free)
+tunnelProc = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5000'], {
+  stdio: ['ignore', 'pipe', 'pipe']
+});
 
-  tunnelProc.stdout.on('data', (d) => {
-    const text = d.toString();
-    const lines = text.split('\n');
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        const obj = JSON.parse(line);
-        if (obj.url) {
-          publicUrl = obj.url;
-          console.clear();
-          printBanner();
-        }
-      } catch (e) {}
-    }
-  });
-
-  setTimeout(() => {
+const urlRegex = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
+const onData = (data) => {
+  const match = data.toString().match(urlRegex);
+  if (match && !publicUrl) {
+    publicUrl = match[0];
     console.clear();
     printBanner();
-  }, 2000);
+  }
+};
+tunnelProc.stdout.on('data', onData);
+tunnelProc.stderr.on('data', onData);
 
-} else {
-  // Cloudflare Tunnel (Clean, no warning screens, 100% free)
-  tunnelProc = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5000'], {
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-
-  const urlRegex = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
-  const onData = (data) => {
-    const match = data.toString().match(urlRegex);
-    if (match && !publicUrl) {
-      publicUrl = match[0];
-      console.clear();
-      printBanner();
-    }
-  };
-  tunnelProc.stdout.on('data', onData);
-  tunnelProc.stderr.on('data', onData);
-
-  setTimeout(() => {
-    if (!publicUrl) printBanner();
-  }, 6000);
-}
+setTimeout(() => {
+  if (!publicUrl) printBanner();
+}, 6000);
 
 // Auto-open browser
 setTimeout(() => {
