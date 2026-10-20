@@ -75,7 +75,10 @@
   async function api(path, options) {
     options = options || {};
     var url = (path.startsWith('http') ? path : (API_BASE + path));
-    var headers = Object.assign({ 'Content-Type': 'application/json' }, options.headers || {});
+    var headers = Object.assign({
+      'Content-Type': 'application/json',
+      'ngrok-skip-browser-warning': 'true'
+    }, options.headers || {});
     if (ownerToken) {
       headers['Authorization'] = 'Bearer ' + ownerToken;
     } else if (authToken) {
@@ -512,7 +515,12 @@
     // Hovod HLS adaptive bitrate streaming
     if (videoSrc.includes('.m3u8')) {
       if (window.Hls && Hls.isSupported()) {
-        hlsInstance = new Hls({ enableWorker: true });
+        hlsInstance = new Hls({
+          enableWorker: true,
+          xhrSetup: function(xhr, url) {
+            xhr.setRequestHeader('ngrok-skip-browser-warning', 'true');
+          }
+        });
         hlsInstance.loadSource(videoSrc);
         hlsInstance.attachMedia(el);
         $("#playerMode").textContent = (preview ? "Preview · " : "") + "⚡ Adaptive HLS";
