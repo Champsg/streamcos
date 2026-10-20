@@ -6,13 +6,13 @@
 # the tunnel hostname changes.
 [[redirects]]
   from = "/api/*"
-  to = "http://localhost:5000/api/:splat"
+  to = "https://streamcos-play.loca.lt/api/:splat"
   status = 200
   force = true
 
 [[redirects]]
   from = "/uploads/*"
-  to = "http://localhost:5000/uploads/:splat"
+  to = "https://streamcos-play.loca.lt/uploads/:splat"
   status = 200
   force = true
 

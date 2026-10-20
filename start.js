@@ -11,7 +11,7 @@
  *     frontend/runtime-config.js and netlify.toml, so the deployed frontend
  *     keeps working without editing code.
  *
- * Flags: --force  --no-tunnel  --port <n>
+ * Flags: --force  --no-tunnel  --port <n>  --subdomain <name>  --tunnel <localtunnel|cloudflare>  --token <cf-token>
  */
 
 const { spawn, execSync } = require('child_process');
@@ -25,6 +25,17 @@ const FORCE = args.includes('--force');
 const NO_TUNNEL = args.includes('--no-tunnel');
 const portFlag = args.indexOf('--port');
 const PORT = portFlag >= 0 && args[portFlag + 1] ? Number(args[portFlag + 1]) : Number(process.env.PORT || 5000);
+
+const subdomainFlag = args.indexOf('--subdomain');
+const SUBDOMAIN = subdomainFlag >= 0 && args[subdomainFlag + 1] ? args[subdomainFlag + 1] : (process.env.STREAMCOS_SUBDOMAIN || 'streamcos-play');
+
+const tokenFlag = args.indexOf('--token');
+const TUNNEL_TOKEN = tokenFlag >= 0 && args[tokenFlag + 1] ? args[tokenFlag + 1] : (process.env.CLOUDFLARE_TUNNEL_TOKEN || null);
+
+const tunnelFlag = args.indexOf('--tunnel');
+const TUNNEL_TYPE = tunnelFlag >= 0 && args[tunnelFlag + 1]
+  ? args[tunnelFlag + 1]
+  : (args.includes('--cloudflare') || TUNNEL_TOKEN ? 'cloudflare' : 'localtunnel');
 
 const ROOT = __dirname;
 const TUNNEL_FILE = path.join(ROOT, '.streamcos-tunnel.json');
@@ -107,6 +118,7 @@ async function main() {
   });
 
   let tunnelProc = null;
+  let tunnelInstance = null;
   let publicUrl = null;
 
   function banner() {
@@ -121,12 +133,56 @@ async function main() {
     console.log('');
   }
 
-  if (!NO_TUNNEL) {
-    tunnelProc = spawn('cloudflared', ['tunnel', '--url', `http://localhost:${PORT}`], {
+  function handleTunnelUrl(url) {
+    if (publicUrl === url) return;
+    publicUrl = url;
+    try {
+      const { updateConfig } = require('./scripts/set-api-base');
+      updateConfig(publicUrl);
+      fs.writeFileSync(TUNNEL_FILE, JSON.stringify({ url: publicUrl, at: Date.now() }, null, 2));
+      line('  Permanent Public Link: ' + publicUrl, 'yellow');
+      line('  frontend/runtime-config.js and netlify.toml point to this permanent link.', 'dim');
+    } catch (err) {
+      line('  Could not record the tunnel URL: ' + err.message, 'yellow');
+    }
+    banner();
+  }
+
+  async function connectLocaltunnel() {
+    try {
+      const localtunnel = require('localtunnel');
+      const tunnel = await localtunnel({ port: PORT, subdomain: SUBDOMAIN });
+      tunnelInstance = tunnel;
+      handleTunnelUrl(tunnel.url);
+
+      tunnel.on('close', () => {
+        if (!shuttingDown) {
+          line('  Tunnel closed — reconnecting in 3s...', 'dim');
+          setTimeout(connectLocaltunnel, 3000);
+        }
+      });
+      tunnel.on('error', (err) => {
+        if (!shuttingDown) {
+          line('  Tunnel warning: ' + (err ? err.message : 'connection glitch'), 'dim');
+        }
+      });
+    } catch (err) {
+      if (!shuttingDown) {
+        line('  Localtunnel failed (' + (err ? err.message : 'error') + '). Retrying in 4s...', 'yellow');
+        setTimeout(connectLocaltunnel, 4000);
+      }
+    }
+  }
+
+  function connectCloudflare() {
+    const cfArgs = TUNNEL_TOKEN
+      ? ['tunnel', 'run', '--token', TUNNEL_TOKEN]
+      : ['tunnel', '--url', `http://localhost:${PORT}`];
+
+    tunnelProc = spawn('cloudflared', cfArgs, {
       stdio: ['ignore', 'pipe', 'pipe']
     });
 
-    // A missing binary is a normal condition, not a crash.
     tunnelProc.on('error', (err) => {
       tunnelProc = null;
       if (err.code === 'ENOENT') {
@@ -139,26 +195,19 @@ async function main() {
     });
 
     const onTunnelData = (data) => {
-      if (publicUrl) return;
       const match = data.toString().match(/https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/);
-      if (!match) return;
-      publicUrl = match[0];
-      try {
-        const { updateConfig } = require('./scripts/set-api-base');
-        updateConfig(publicUrl);
-        fs.writeFileSync(TUNNEL_FILE, JSON.stringify({ url: publicUrl, at: Date.now() }, null, 2));
-        line('  Tunnel: ' + publicUrl, 'yellow');
-        line('  frontend/runtime-config.js and netlify.toml now point at it.', 'dim');
-        line('  Redeploy the Netlify site (git push) for the redirects to update.', 'dim');
-      } catch (err) {
-        line('  Could not record the tunnel URL: ' + err.message, 'yellow');
-      }
-      banner();
+      if (match) handleTunnelUrl(match[0]);
     };
 
-    if (tunnelProc) {
-      tunnelProc.stdout.on('data', onTunnelData);
-      tunnelProc.stderr.on('data', onTunnelData);
+    tunnelProc.stdout.on('data', onTunnelData);
+    tunnelProc.stderr.on('data', onTunnelData);
+  }
+
+  if (!NO_TUNNEL) {
+    if (TUNNEL_TYPE === 'cloudflare') {
+      connectCloudflare();
+    } else {
+      connectLocaltunnel();
     }
   }
 
@@ -178,6 +227,7 @@ async function main() {
     shuttingDown = true;
     console.log('\n  Shutting down StreamCos…');
     try { serverProc.kill(); } catch (e) {}
+    try { if (tunnelInstance) tunnelInstance.close(); } catch (e) {}
     try { if (tunnelProc) tunnelProc.kill(); } catch (e) {}
     setTimeout(() => process.exit(code), 150);
   }

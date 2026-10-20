@@ -14,7 +14,14 @@
     "config:url": "node scripts/set-api-base.js",
     "reset:pin": "node backend/reset-pin.js"
   },
-  "keywords": ["video", "streaming", "node"],
+  "keywords": [
+    "video",
+    "streaming",
+    "node"
+  ],
   "author": "",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "localtunnel": "^2.0.2"
+  }
 }

@@ -528,7 +528,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS, X-Token, Range, ngrok-skip-browser-warning',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS, X-Token, Range, ngrok-skip-browser-warning, Bypass-Tunnel-Reminder, bypass-tunnel-reminder',
       'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length'
     });
     res.end();

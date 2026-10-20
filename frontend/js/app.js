@@ -109,7 +109,8 @@
     var url = (path.startsWith('http') ? path : (API_BASE + path));
     var headers = Object.assign({
       'Content-Type': 'application/json',
-      'ngrok-skip-browser-warning': 'true'
+      'ngrok-skip-browser-warning': 'true',
+      'Bypass-Tunnel-Reminder': 'true'
     }, options.headers || {});
     if (ownerToken) {
       headers['Authorization'] = 'Bearer ' + ownerToken;
@@ -743,6 +744,7 @@
           enableWorker: true,
           xhrSetup: function(xhr, url) {
             xhr.setRequestHeader('ngrok-skip-browser-warning', 'true');
+            xhr.setRequestHeader('Bypass-Tunnel-Reminder', 'true');
             if (activePlayToken) {
               xhr.setRequestHeader('Authorization', 'Bearer ' + activePlayToken);
             } else if (session && session.token) {
