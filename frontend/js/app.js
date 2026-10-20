@@ -486,29 +486,30 @@
     $("#previewEnd").classList.remove("on");
 
     var videoSrc = v.video || '';
+    var activePlayToken = null;
 
-    // If it's a full playback (not preview), request signed token from backend
-    if (!preview) {
-      try {
-        var tokenRes = await api('/api/player/token', {
-          method: 'POST',
-          body: JSON.stringify({ videoId: id })
-        });
-        if (tokenRes && tokenRes.playToken) {
-          if (videoSrc.startsWith('/uploads/') || (API_BASE && videoSrc.startsWith(API_BASE))) {
-            videoSrc = (videoSrc.startsWith('http') ? videoSrc : (API_BASE + videoSrc));
-            videoSrc += (videoSrc.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tokenRes.playToken);
-          }
+    try {
+      var tokenRes = await api('/api/player/token', {
+        method: 'POST',
+        body: JSON.stringify({ videoId: id, isPreview: !!preview })
+      });
+      if (tokenRes && tokenRes.playToken) {
+        activePlayToken = tokenRes.playToken;
+        if (videoSrc.startsWith('/uploads/') || (API_BASE && videoSrc.startsWith(API_BASE))) {
+          videoSrc = (videoSrc.startsWith('http') ? videoSrc : (API_BASE + videoSrc));
+          videoSrc += (videoSrc.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(tokenRes.playToken);
         }
-      } catch (err) {
+      }
+    } catch (err) {
+      if (!preview) {
         toast(err.message || 'Pass required to stream');
         buyFlow(id);
         return;
       }
-    } else {
-      if (videoSrc.startsWith('/uploads/')) {
-        videoSrc = (API_BASE ? API_BASE : '') + videoSrc;
-      }
+    }
+
+    if (videoSrc.startsWith('/uploads/')) {
+      videoSrc = (API_BASE ? API_BASE : '') + videoSrc;
     }
 
     var el = $("#videoEl");
@@ -519,6 +520,22 @@
           enableWorker: true,
           xhrSetup: function(xhr, url) {
             xhr.setRequestHeader('ngrok-skip-browser-warning', 'true');
+            if (activePlayToken) {
+              xhr.setRequestHeader('Authorization', 'Bearer ' + activePlayToken);
+            } else if (session && session.token) {
+              xhr.setRequestHeader('Authorization', 'Bearer ' + session.token);
+            }
+          }
+        });
+        hlsInstance.on(Hls.Events.ERROR, function(event, data) {
+          if (data.fatal) {
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              hlsInstance.startLoad();
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+              hlsInstance.recoverMediaError();
+            } else {
+              hlsInstance.destroy();
+            }
           }
         });
         hlsInstance.loadSource(videoSrc);

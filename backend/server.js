@@ -194,10 +194,27 @@ function serveUpload(req, res, pathname, searchParams) {
   if (isVideoMedia) {
     const token = extractToken(req, searchParams);
     const decoded = verifyToken(token, db.serverSecret);
-    const isAuthorized = decoded && (decoded.role === 'owner' || decoded.access === 'paid' || decoded.access === 'free');
+    const isAuthorized = decoded && (decoded.role === 'owner' || decoded.access === 'paid' || decoded.access === 'free' || decoded.access === 'preview');
     
-    // Also allow if this specific video file belongs to a free catalog title
-    const isCatalogFree = db.catalog.some(c => Number(c.price || 0) === 0 && c.video && c.video.includes(clean));
+    // Also allow if this media file belongs to a free catalog title
+    let hlsFolder = null;
+    if (clean.startsWith('hls/')) {
+      const parts = clean.split('/');
+      if (parts.length >= 2) hlsFolder = parts[1];
+    }
+    let videoFile = null;
+    if (clean.startsWith('videos/')) {
+      videoFile = clean.slice('videos/'.length);
+    }
+
+    const isCatalogFree = db.catalog.some(c => {
+      if (Number(c.price || 0) !== 0) return false;
+      if (!c.video) return false;
+      if (hlsFolder && c.video.includes(hlsFolder)) return true;
+      if (videoFile && c.video.includes(videoFile)) return true;
+      if (c.video.includes(clean)) return true;
+      return false;
+    });
 
     if (!isAuthorized && !isCatalogFree) {
       res.writeHead(403, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
@@ -255,7 +272,8 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS, X-Token'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Filename, X-Auto-HLS, X-Token, Range, ngrok-skip-browser-warning',
+      'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length'
     });
     res.end();
     return;
@@ -502,14 +520,14 @@ const server = http.createServer(async (req, res) => {
 
       // Signed Playback Token Gatekeeper
       if (pathname === '/api/player/token' && method === 'POST') {
-        const { videoId } = await readBody(req);
+        const { videoId, isPreview } = await readBody(req);
         if (!videoId) return json(res, 400, { error: 'videoId required' });
 
         const film = db.catalog.find(c => c.id === videoId);
         const isFree = !film || Number(film.price || 0) === 0;
 
-        if (isFree) {
-          const playToken = createToken({ videoId, access: 'free' }, db.serverSecret, 4 * 3600);
+        if (isFree || isPreview) {
+          const playToken = createToken({ videoId, access: isFree ? 'free' : 'preview' }, db.serverSecret, 4 * 3600);
           return json(res, 200, { ok: true, playToken, videoUrl: film ? film.video : null });
         }
 
