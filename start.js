@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 1. Free port 5000 and kill old tunnel instances
+// 1. Free port 5000 and clean up old instances
 try {
   if (process.platform === 'win32') {
     try {
@@ -43,16 +43,16 @@ for (const name of Object.keys(nets)) {
 }
 
 // 4. Load Tunnel Configuration
-let tunnelConfig = { authtoken: '', domain: '' };
+let tunnelConfig = { provider: 'cloudflare' };
 const configPath = path.join(__dirname, 'tunnel-config.json');
 try {
   if (fs.existsSync(configPath)) {
-    tunnelConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    tunnelConfig = Object.assign(tunnelConfig, JSON.parse(fs.readFileSync(configPath, 'utf8')));
   }
 } catch (e) {}
 
 const ngrokBin = path.join(__dirname, 'bin', 'ngrok.exe');
-const useNgrok = fs.existsSync(ngrokBin) && tunnelConfig.authtoken && tunnelConfig.domain;
+const useNgrok = tunnelConfig.provider === 'ngrok' && fs.existsSync(ngrokBin) && tunnelConfig.authtoken;
 
 let publicUrl = null;
 let tunnelProc = null;
@@ -65,60 +65,59 @@ function printBanner() {
     console.log(`\x1b[1m[2] Local Wi-Fi (Phones):\x1b[0m http://${ip}:5000`);
   });
   if (publicUrl) {
-    console.log(`\x1b[33m\x1b[1m[3] Worldwide Public URL:\x1b[0m ${publicUrl}`);
-    if (useNgrok) {
-      console.log('\x1b[32m    (Permanent URL locked — never changes on restart)\x1b[0m');
-    }
+    console.log(`\x1b[33m\x1b[1m[3] Worldwide Public Link:\x1b[0m ${publicUrl}`);
+    console.log('\x1b[32m    (Cloudflare Edge Protected — ZERO warning screens)\x1b[0m');
   } else {
-    console.log('\x1b[33m[3] Worldwide Public URL:\x1b[0m Connecting tunnel...');
+    console.log('\x1b[33m[3] Worldwide Public Link:\x1b[0m Connecting Cloudflare tunnel...');
   }
   console.log('----------------------------------------------------------');
-  if (!useNgrok) {
-    console.log('\x1b[36m💡 Tip to lock in a permanent URL that never changes:\x1b[0m');
-    console.log('   Get your free static domain at https://dashboard.ngrok.com');
-    console.log('   and paste it into tunnel-config.json');
-    console.log('----------------------------------------------------------');
-  }
   console.log('• Keep this window open to keep your platform live 24/7.');
   console.log('• Press Ctrl+C at any time to stop.\n');
 }
 
 if (useNgrok) {
-  // Use Permanent Ngrok Static Domain
-  console.log(`Connecting permanent public domain: https://${tunnelConfig.domain} ...\n`);
-  publicUrl = `https://${tunnelConfig.domain.replace(/^https?:\/\//, '')}`;
   tunnelProc = spawn(ngrokBin, [
     'http', '5000',
-    '--domain', tunnelConfig.domain,
-    '--authtoken', tunnelConfig.authtoken,
     '--log', 'stdout',
     '--log-format', 'json'
   ], { stdio: ['ignore', 'pipe', 'pipe'] });
 
+  tunnelProc.stdout.on('data', (d) => {
+    const text = d.toString();
+    const lines = text.split('\n');
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const obj = JSON.parse(line);
+        if (obj.url) {
+          publicUrl = obj.url;
+          console.clear();
+          printBanner();
+        }
+      } catch (e) {}
+    }
+  });
+
   setTimeout(() => {
     console.clear();
     printBanner();
-  }, 1500);
+  }, 2000);
 
 } else {
-  // Cloudflare Quick Tunnel Fallback
-  console.log('Connecting Cloudflare edge tunnel for worldwide access...\n');
+  // Cloudflare Tunnel (Clean, no warning screens, 100% free)
   tunnelProc = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5000'], {
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
   const urlRegex = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
-
   const onData = (data) => {
-    const text = data.toString();
-    const match = text.match(urlRegex);
+    const match = data.toString().match(urlRegex);
     if (match && !publicUrl) {
       publicUrl = match[0];
       console.clear();
       printBanner();
     }
   };
-
   tunnelProc.stdout.on('data', onData);
   tunnelProc.stderr.on('data', onData);
 
@@ -134,7 +133,7 @@ setTimeout(() => {
       spawn('cmd.exe', ['/c', 'start', 'http://localhost:5000'], { detached: true, stdio: 'ignore' });
     }
   } catch (e) {}
-}, 2000);
+}, 2500);
 
 // Cleanup on exit
 function shutdown() {
