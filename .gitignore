@@ -5,6 +5,9 @@ Thumbs.db
 .env
 .idea/
 .vscode/
+bin/
+*.exe
+tunnel-config.json
 
 # Local media uploads & HLS chunks (prevent pushing large video binaries to Git)
 backend/uploads/videos/*

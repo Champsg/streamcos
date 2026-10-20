@@ -1,8 +1,9 @@
 const { spawn, execSync } = require('child_process');
+const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 1. Free port 5000 and kill old tunnel instances if running
+// 1. Free port 5000 and kill old tunnel instances
 try {
   if (process.platform === 'win32') {
     try {
@@ -17,6 +18,7 @@ try {
       }
     } catch (e) {}
     try { execSync('taskkill /F /IM cloudflared.exe', { stdio: 'ignore' }); } catch(e){}
+    try { execSync('taskkill /F /IM ngrok.exe', { stdio: 'ignore' }); } catch(e){}
   }
 } catch (e) {}
 
@@ -31,10 +33,6 @@ const serverProc = spawn(process.execPath, [path.join(__dirname, 'backend', 'ser
   stdio: ['ignore', 'pipe', 'inherit']
 });
 
-serverProc.stdout.on('data', (d) => {
-  // Silent or info
-});
-
 // 3. Find Local Network IPs
 const nets = os.networkInterfaces();
 const localIps = [];
@@ -44,14 +42,20 @@ for (const name of Object.keys(nets)) {
   }
 }
 
-// 4. Start Cloudflare Public Tunnel
-console.log('Creating secure Cloudflare edge tunnel for worldwide access...\n');
-const tunnelProc = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5000'], {
-  stdio: ['ignore', 'pipe', 'pipe']
-});
+// 4. Load Tunnel Configuration
+let tunnelConfig = { authtoken: '', domain: '' };
+const configPath = path.join(__dirname, 'tunnel-config.json');
+try {
+  if (fs.existsSync(configPath)) {
+    tunnelConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  }
+} catch (e) {}
+
+const ngrokBin = path.join(__dirname, 'bin', 'ngrok.exe');
+const useNgrok = fs.existsSync(ngrokBin) && tunnelConfig.authtoken && tunnelConfig.domain;
 
 let publicUrl = null;
-const urlRegex = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
+let tunnelProc = null;
 
 function printBanner() {
   console.log('\x1b[32m%s\x1b[0m', '✔ ALL SYSTEMS ONLINE — STREAMING FROM YOUR PC 24/7');
@@ -62,49 +66,81 @@ function printBanner() {
   });
   if (publicUrl) {
     console.log(`\x1b[33m\x1b[1m[3] Worldwide Public URL:\x1b[0m ${publicUrl}`);
+    if (useNgrok) {
+      console.log('\x1b[32m    (Permanent URL locked — never changes on restart)\x1b[0m');
+    }
   } else {
     console.log('\x1b[33m[3] Worldwide Public URL:\x1b[0m Connecting tunnel...');
   }
   console.log('----------------------------------------------------------');
+  if (!useNgrok) {
+    console.log('\x1b[36m💡 Tip to lock in a permanent URL that never changes:\x1b[0m');
+    console.log('   Get your free static domain at https://dashboard.ngrok.com');
+    console.log('   and paste it into tunnel-config.json');
+    console.log('----------------------------------------------------------');
+  }
   console.log('• Keep this window open to keep your platform live 24/7.');
   console.log('• Press Ctrl+C at any time to stop.\n');
 }
 
-tunnelProc.stdout.on('data', (data) => {
-  const text = data.toString();
-  const match = text.match(urlRegex);
-  if (match && !publicUrl) {
-    publicUrl = match[0];
+if (useNgrok) {
+  // Use Permanent Ngrok Static Domain
+  console.log(`Connecting permanent public domain: https://${tunnelConfig.domain} ...\n`);
+  publicUrl = `https://${tunnelConfig.domain.replace(/^https?:\/\//, '')}`;
+  tunnelProc = spawn(ngrokBin, [
+    'http', '5000',
+    '--domain', tunnelConfig.domain,
+    '--authtoken', tunnelConfig.authtoken,
+    '--log', 'stdout',
+    '--log-format', 'json'
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+  setTimeout(() => {
     console.clear();
     printBanner();
-  }
-});
+  }, 1500);
 
-tunnelProc.stderr.on('data', (data) => {
-  const text = data.toString();
-  const match = text.match(urlRegex);
-  if (match && !publicUrl) {
-    publicUrl = match[0];
-    console.clear();
-    printBanner();
-    // Auto-open browser
-    try {
-      if (process.platform === 'win32') {
-        spawn('cmd.exe', ['/c', 'start', 'http://localhost:5000'], { detached: true, stdio: 'ignore' });
-      }
-    } catch(e){}
-  }
-});
+} else {
+  // Cloudflare Quick Tunnel Fallback
+  console.log('Connecting Cloudflare edge tunnel for worldwide access...\n');
+  tunnelProc = spawn('cloudflared', ['tunnel', '--url', 'http://localhost:5000'], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
 
+  const urlRegex = /https:\/\/[a-zA-Z0-9-]+\.trycloudflare\.com/;
+
+  const onData = (data) => {
+    const text = data.toString();
+    const match = text.match(urlRegex);
+    if (match && !publicUrl) {
+      publicUrl = match[0];
+      console.clear();
+      printBanner();
+    }
+  };
+
+  tunnelProc.stdout.on('data', onData);
+  tunnelProc.stderr.on('data', onData);
+
+  setTimeout(() => {
+    if (!publicUrl) printBanner();
+  }, 6000);
+}
+
+// Auto-open browser
 setTimeout(() => {
-  if (!publicUrl) printBanner();
-}, 6000);
+  try {
+    if (process.platform === 'win32') {
+      spawn('cmd.exe', ['/c', 'start', 'http://localhost:5000'], { detached: true, stdio: 'ignore' });
+    }
+  } catch (e) {}
+}, 2000);
 
 // Cleanup on exit
 function shutdown() {
   console.log('\nShutting down StreamCos cleanly...');
   try { serverProc.kill(); } catch(e){}
-  try { tunnelProc.kill(); } catch(e){}
+  try { if (tunnelProc) tunnelProc.kill(); } catch(e){}
   process.exit(0);
 }
 
