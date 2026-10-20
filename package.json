@@ -4,8 +4,8 @@
   "description": "StreamCos Video Streaming Platform with separated Backend & Frontend",
   "main": "backend/server.js",
   "scripts": {
-    "start": "node backend/server.js",
-    "dev": "node backend/server.js",
+    "start": "node start.js",
+    "server": "node backend/server.js",
     "tunnel": "cloudflared tunnel --url http://localhost:5000",
     "test": "node backend/test.js"
   },
