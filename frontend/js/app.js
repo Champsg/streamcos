@@ -1656,11 +1656,16 @@
         updateServerBadge(true, "PC Online");
         return true;
       }
+      updateServerBadge(false, "Offline");
+      return false;
     } catch (e) {
       updateServerBadge(false, "Offline");
       return false;
     }
   }
+
+  // Poll server health every 10s to keep status badge real-time
+  setInterval(checkServerHealth, 10000);
 
   function openServerModal() {
     var sh = $("#serverSheet"), sc = $("#scrim");
